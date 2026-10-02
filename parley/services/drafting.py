@@ -31,7 +31,7 @@ from parley.core.messages import InvoiceLine
 from parley.core.money import format_money
 from parley.db.models import Customer, Message, MessageCase, Task, Tenant
 from parley.ports.model import ModelError, ModelPort
-from parley.services.cases import cases_of_message, invoice_line
+from parley.services.cases import cases_of_message, invoice_line, record_amounts
 from parley.services.model_calls import run_job
 from parley.services.runtime import Runtime
 
@@ -119,6 +119,7 @@ def _draft_message(rt: Runtime, session: Session, message: Message) -> None:
             message.body = draft.body
             message.prompt_version = draft.prompt_version
 
+    record_amounts(session, message.id, cases)
     total = sum(line.amount_due for line in lines)
     if failed_checks:
         summary = (

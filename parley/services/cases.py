@@ -215,6 +215,14 @@ def cases_of_message(session: Session, message_id: uuid.UUID, lock: bool = False
     return list(session.scalars(query))
 
 
+def record_amounts(session: Session, message_id: uuid.UUID, cases: list[Case]) -> None:
+    """Note each invoice's amount due on the message link, as the text is finalised."""
+    amounts = {case.id: case.invoice.amount_due for case in cases}
+    links = session.scalars(select(MessageCase).where(MessageCase.message_id == message_id))
+    for link in links:
+        link.amount_due = amounts.get(link.case_id, link.amount_due)
+
+
 def invoice_line(invoice: Invoice) -> InvoiceLine:
     return InvoiceLine(
         number=invoice.number,

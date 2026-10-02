@@ -27,7 +27,13 @@ from parley.core.domain import (
 )
 from parley.core.workflow import WorkflowError, on_task_resolved
 from parley.db.models import Case, Dispute, Message, Task, Tenant
-from parley.services.cases import NotFoundError, apply_transition, cases_of_message, invoice_line
+from parley.services.cases import (
+    NotFoundError,
+    apply_transition,
+    cases_of_message,
+    invoice_line,
+    record_amounts,
+)
 
 
 class TaskError(ValueError):
@@ -90,10 +96,11 @@ def _resolve_approval(
         case _:
             raise TaskError([f"{action} does not apply to an approval task"])
 
-    lines = [invoice_line(case.invoice) for case in cases_of_message(session, message.id)]
-    problems = check_draft(message.subject, message.body, lines)
+    cases = cases_of_message(session, message.id)
+    problems = check_draft(message.subject, message.body, [invoice_line(c.invoice) for c in cases])
     if problems:
         raise TaskError(problems)
+    record_amounts(session, message.id, cases)
     message.status = MessageStatus.PENDING
 
 

@@ -1,0 +1,79 @@
+name: Evals
+
+# The model-calling evals cost money and need AWS access, so they run only on
+# pull requests that touch prompts or model code, nightly, and on demand.
+# Set the repository variable AWS_EVAL_ROLE_ARN (an IAM role this workflow may
+# assume through GitHub OIDC, allowed to call Bedrock) to turn them on.
+on:
+  pull_request:
+    paths:
+      - "parley/collections_ai/**"
+      - "parley/core/checks.py"
+      - "parley/services/drafting.py"
+      - "parley/services/replies.py"
+      - "parley/services/investigation.py"
+      - "parley/adapters/models/**"
+      - "harness/**"
+      - "evalkit/**"
+      - "evals/**"
+  schedule:
+    - cron: "30 20 * * *" # 02:00 in India
+  workflow_dispatch:
+
+permissions:
+  id-token: write # to assume the AWS role
+  contents: read
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: parley
+          POSTGRES_PASSWORD: parley
+          POSTGRES_DB: parley_eval
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U parley"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PARLEY_EVAL_DATABASE_URL: postgresql+psycopg://parley:parley@localhost:5432/parley_eval
+      PARLEY_MODEL_PROVIDER: bedrock
+      PARLEY_AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check eval access
+        id: access
+        run: |
+          if [ -z "${{ vars.AWS_EVAL_ROLE_ARN }}" ]; then
+            echo "::warning::Evals skipped: set the AWS_EVAL_ROLE_ARN repository variable to run them."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.access.outputs.enabled == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_EVAL_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+      - if: steps.access.outputs.enabled == 'true'
+        uses: astral-sh/setup-uv@v6
+      - if: steps.access.outputs.enabled == 'true'
+        run: uv sync --locked
+      - name: Run evals on the held-out test split
+        if: steps.access.outputs.enabled == 'true'
+        run: uv run python -m evals run all --split test
+      - name: Gate against the baseline
+        if: steps.access.outputs.enabled == 'true'
+        run: uv run python -m evals gate
+      - name: Keep the reports
+        if: always() && steps.access.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports
+          path: reports/

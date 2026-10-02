@@ -265,6 +265,9 @@ class MessageCase(Base):
     tenant_id: Mapped[uuid.UUID] = _tenant_fk()
     # None for messages that are not reminders (e.g. inbound replies).
     reminder_number: Mapped[int | None] = mapped_column(Integer)
+    # The invoice's amount due when the message text was finalised, so an audit
+    # can check what was sent against what was owed at the time.
+    amount_due: Mapped[int | None] = mapped_column(BigInteger)
 
     message: Mapped[Message] = relationship(back_populates="links")
 

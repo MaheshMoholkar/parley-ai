@@ -3,14 +3,15 @@
 A collections agent: it chases overdue invoices for a business and hands a human
 only the cases that need judgement. The full design is in [docs/spec.md](docs/spec.md).
 
-**Status: milestones M1 to M3.** The service syncs invoices from a CSV aging
+**Status: milestones M1 to M4.** The service syncs invoices from a CSV aging
 report, runs each overdue invoice through the case state machine, drafts
 reminders with Claude (on Amazon Bedrock) and checks every draft in code, sends
 email through Amazon SES, reads customer replies, and records promises and
 disputes. When a customer says "we already paid" or disputes an invoice, an
 investigator agent checks the records with read-only tools and hands a person a
 finding backed by record ids. A person approves drafts and takes over unclear
-cases on a small review screen. Next: the eval suite (M4).
+cases on a small review screen. An eval suite measures the model's work and
+gates changes in CI. Next: M5 (cost and routing, more guardrail tests).
 
 By default it runs with no model and no email provider: reminders use a fixed
 template and are recorded instead of sent. See "Turning on the model and email".
@@ -102,11 +103,44 @@ uv run pytest                     # unit + database tests (needs Postgres)
 The database tests use `PARLEY_TEST_DATABASE_URL`, which defaults to a
 `parley_test` database on localhost. Its contents are deleted on every run.
 
+## Evals
+
+The evals measure the parts that depend on the model, on real model calls:
+
+| Eval | What it checks | Dataset |
+| --- | --- | --- |
+| `replies` | Intent, promised date and amount, language of a customer reply | 155 hand-labelled replies, 63 in Hindi, Marathi or Hinglish, 10 injection attempts |
+| `drafts` | Reminders pass the code checks and the tone judge | 30 scenarios: 4 languages, 3 tones, adversarial briefs |
+| `investigations` | The investigator's finding and the payments it cites | 26 seeded ledgers with known answers |
+| `personas` | Whole cases over 30 simulated days; no policy violation in the log | 6 debtor personas played by the model |
+
+```bash
+PARLEY_MODEL_PROVIDER=bedrock uv run python -m evals run replies --split dev   # tune on dev
+PARLEY_MODEL_PROVIDER=bedrock uv run python -m evals run all --split test      # held-out score
+uv run python -m evals gate        # compare reports/ with evals/baseline.json
+uv run python -m evals baseline    # accept the current test-split reports as the baseline
+```
+
+The gate has hard rules (no wrong-amount or banned-phrase drafts, no injection
+that changes a reading, no policy violations) and accuracy rules: a metric may
+not drop below the baseline by more than its noise margin, which depends on how
+many examples it is measured on. Until a baseline is recorded, only the hard
+rules apply. The `Evals` GitHub workflow runs them on pull requests that touch
+prompts or model code and nightly, once the `AWS_EVAL_ROLE_ARN` repository
+variable is set.
+
+The labels in `evals/datasets/` were written for this project and should be
+reviewed by someone who knows the customers and languages before the baseline
+is trusted. The eval plumbing itself is tested with fake models in
+`tests/integration/test_eval_plumbing.py`.
+
 ## Layout
 
 ```text
 harness/         generic agent loop, tool registry, limits, run log; knows
                  nothing about invoices (CI enforces this)
+evalkit/         generic eval runner, reports and CI gate (also project-free)
+evals/           this project's eval datasets, tasks, scorers and CLI
 parley/
   core/          pure rules: no database, no network. Start reading here.
     domain.py      names: case states, task kinds, statuses
@@ -134,6 +168,7 @@ parley/
     inbound.py     receive and match a customer's email reply
     replies.py     read replies and act on them; update the customer brief
     investigation.py  the investigator's tools, runs, and the check on findings
+    audit.py       finds policy violations in the sent-message log
     tasks.py       a person approving, editing, rejecting, resuming, closing
     delivery.py    send pending messages from the outbox
     worker.py      the background loop that runs all of the above

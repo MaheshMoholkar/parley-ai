@@ -143,7 +143,7 @@ Each adapter also declares two optional capabilities.
 - Receives Vyavasay webhooks and translates them into the four events.
 - Vyavasay needs only this: four read endpoints, two webhooks (invoice posted, payment recorded), and optionally a panel that reads case status from the core's API.
 
-**Boundary check:** a search of the code for "Vyavasay" or "GST" must return hits only inside `parley/adapters/accounting/vyavasay/`. `docs/` is excluded. CI runs this check.
+**Boundary check:** a search of the code for "Vyavasay" or "GST" must return hits only inside `parley/adapters/accounting/vyavasay/`. `docs/` and the eval datasets (customer text) are excluded. CI runs this check.
 
 ## Collections workflow
 

@@ -46,6 +46,7 @@ from sqlalchemy import select
 from parley.adapters.clock import FakeClock
 from parley.core.domain import CaseState, CloseReason, MessageStatus, TaskKind, TaskStatus
 from parley.db.models import Case, Customer, Invoice, Message, MessageCase, Task
+from parley.services.audit import find_policy_violations
 from parley.services.cases import set_case_paused, set_customer_paused
 from parley.services.runtime import Runtime
 from parley.services.sync import sync_tenant
@@ -118,6 +119,7 @@ def test_twenty_invoices_over_thirty_days(rt: Runtime, clock: FakeClock, tmp_pat
         _check_messages(session)
         _check_cases(session)
         _check_tasks(session)
+        assert find_policy_violations(session, tenant_id) == []
 
 
 def _check_messages(session) -> None:  # type: ignore[no-untyped-def]
