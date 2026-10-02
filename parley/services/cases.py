@@ -7,9 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from parley.core.domain import CaseState, InvoiceStatus, PromiseStatus, TaskStatus
+from parley.core.domain import CaseState, DisputeStatus, InvoiceStatus, PromiseStatus, TaskStatus
+from parley.core.messages import InvoiceLine
 from parley.core.workflow import Transition, first_reminder_at
-from parley.db.models import Case, Customer, Invoice, Promise, Task, Tenant
+from parley.db.models import Case, Customer, Dispute, Invoice, MessageCase, Promise, Task, Tenant
 
 
 class NotFoundError(LookupError):
@@ -23,6 +24,7 @@ def apply_transition(session: Session, case: Case, transition: Transition, now: 
 
     case.state = transition.state
     case.next_action_at = transition.next_action_at
+    case.extra_reminders += transition.grant_extra_reminders
 
     if transition.state == CaseState.CLOSED:
         case.closed_at = now
@@ -50,6 +52,17 @@ def apply_transition(session: Session, case: Case, transition: Transition, now: 
         )
         for promise in open_promises:
             promise.status = transition.promise_outcome
+
+    if transition.new_dispute is not None:
+        session.add(
+            Dispute(
+                tenant_id=case.tenant_id,
+                case_id=case.id,
+                reason=transition.new_dispute,
+                status=DisputeStatus.OPEN,
+                created_at=now,
+            )
+        )
 
     if transition.new_promise is not None:
         session.add(
@@ -144,3 +157,28 @@ def set_customer_paused(
         raise NotFoundError(f"customer {customer_id} not found")
     customer.paused = paused
     return customer
+
+
+# --- Helpers shared by the message steps ---------------------------------------------
+
+
+def cases_of_message(session: Session, message_id: uuid.UUID, lock: bool = False) -> list[Case]:
+    query = (
+        select(Case)
+        .join(MessageCase, MessageCase.case_id == Case.id)
+        .where(MessageCase.message_id == message_id)
+        .order_by(Case.opened_at, Case.id)
+    )
+    if lock:
+        query = query.with_for_update(of=Case)
+    return list(session.scalars(query))
+
+
+def invoice_line(invoice: Invoice) -> InvoiceLine:
+    return InvoiceLine(
+        number=invoice.number,
+        amount_due=invoice.amount_due,
+        currency=invoice.currency,
+        due_date=invoice.due_date,
+        display_details=invoice.display_details,
+    )

@@ -1,7 +1,9 @@
 """M1 acceptance test (spec, Milestones): "A CSV of 20 invoices produces the right
 cases and due actions across a simulated 30 days."
 
-The worker runs once a day at 10:00 India time, from Monday 5 January 2026 to
+Approval is switched off and no model is configured, so reminders use the fixed
+template and go out as soon as they are due. The worker runs once a day at 10:00
+India time, from Monday 5 January 2026 to
 Wednesday 4 February 2026, with the default policy:
 first reminder 3 days after the due date, 5 days between reminders, at most 4
 reminders, at most 2 messages per customer per week, no contact 20:00-09:00 or
@@ -83,7 +85,7 @@ def feb(day: int) -> date:
 def test_twenty_invoices_over_thirty_days(rt: Runtime, clock: FakeClock, tmp_path: Path) -> None:
     aging = tmp_path / "aging.csv"
     shutil.copy(FIXTURE, aging)
-    tenant_id = make_tenant(rt, aging)
+    tenant_id = make_tenant(rt, aging, approval_mode="none")
 
     # Before the first run: pause customer Gita, and Nisha's case.
     sync_tenant(rt, tenant_id)

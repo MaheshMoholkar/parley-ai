@@ -7,6 +7,7 @@ from parley.core.domain import CaseState, MessageStatus, TaskKind
 from parley.db.models import Case, Message, Task
 from parley.ports.channel import OutboundMessage
 from parley.services.delivery import MAX_ATTEMPTS, deliver_pending_messages
+from parley.services.drafting import draft_queued_messages
 from parley.services.due_cases import run_due_cases
 from parley.services.runtime import Runtime
 from parley.services.sync import sync_tenant
@@ -16,9 +17,12 @@ ROW = invoice_row("A-1", "Asha", "1000", "2026-01-01")
 
 
 def queue_one_reminder(rt: Runtime, tmp_path: Path) -> None:
-    tenant_id = make_tenant(rt, write_aging(tmp_path / "aging.csv", [ROW]))
+    """Queue and draft one reminder (template, no approval), ready to deliver."""
+    aging = write_aging(tmp_path / "aging.csv", [ROW])
+    tenant_id = make_tenant(rt, aging, approval_mode="none")
     sync_tenant(rt, tenant_id)
     run_due_cases(rt, tenant_id)
+    draft_queued_messages(rt, tenant_id)
 
 
 def the_message(rt: Runtime) -> Message:

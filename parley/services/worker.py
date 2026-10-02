@@ -4,7 +4,8 @@ Each round, for each tenant:
 1. sync from the source system, if the last sync is older than the interval;
 2. open cases for invoices that have become overdue;
 3. act on due cases (reminders, escalations, timeouts);
-4. deliver pending messages from the outbox.
+4. draft queued reminders (model, checks, approval gate);
+5. deliver pending messages from the outbox.
 
 Several worker processes can run at once; the row locks in each step keep them
 from doing the same work twice.
@@ -22,6 +23,7 @@ from sqlalchemy import select
 from parley.db.models import Tenant
 from parley.services.cases import open_overdue_cases
 from parley.services.delivery import deliver_pending_messages
+from parley.services.drafting import draft_queued_messages
 from parley.services.due_cases import run_due_cases
 from parley.services.runtime import Runtime
 from parley.services.sync import sync_tenant
@@ -59,6 +61,7 @@ def run_tenant_once(
     with rt.session_factory.begin() as session:
         open_overdue_cases(session, session.get_one(Tenant, tenant_id), now)
     run_due_cases(rt, tenant_id)
+    draft_queued_messages(rt, tenant_id)
     deliver_pending_messages(rt, tenant_id)
 
 

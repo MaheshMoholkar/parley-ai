@@ -22,6 +22,7 @@ from parley.core.domain import (
     InvoiceStatus,
     PromiseStatus,
     ReplyIntent,
+    TaskAction,
     TaskKind,
 )
 from parley.core.policy import Policy
@@ -40,6 +41,7 @@ class CaseView:
     next_action_at: datetime | None
     amount_due: int
     close_reason: CloseReason | None = None
+    extra_reminders: int = 0
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,10 @@ class Transition:
     promise_outcome: PromiseStatus | None = None
     # Set when a reply is a valid promise to pay.
     new_promise: Promise | None = None
+    # Set when a reply disputes the invoice; the text is the customer's reason.
+    new_dispute: str | None = None
+    # Extra reminders a person allowed beyond the policy limit (when resuming).
+    grant_extra_reminders: int = 0
 
 
 # --- Whether the customer may be contacted right now -------------------------
@@ -94,7 +100,7 @@ def on_timer(current: CaseView, policy: Policy, now: datetime, contact: Contact)
     """The case's `next_action_at` has been reached."""
     match current.state:
         case CaseState.SCHEDULED:
-            if current.reminders_sent >= policy.max_reminders:
+            if current.reminders_sent >= reminder_limit(current, policy):
                 return _needs_human(
                     TaskKind.ESCALATION,
                     f"Still unpaid after {current.reminders_sent} reminders.",
@@ -134,6 +140,7 @@ class Reply:
     intent: ReplyIntent
     promised_date: date | None = None
     promised_amount: int | None = None
+    summary: str = ""  # one line for the person who picks up any task
 
 
 def on_reply(
@@ -153,9 +160,24 @@ def on_reply(
     match reply.intent:
         case ReplyIntent.PROMISE:
             return _on_promise(current, reply, policy, now, tz)
-        case ReplyIntent.DISPUTE | ReplyIntent.PAID_CLAIM:
-            # Outreach stops; the investigator runs (from M3).
-            return Transition(CaseState.INVESTIGATING, next_action_at=None)
+        case ReplyIntent.DISPUTE:
+            # Outreach to this customer stops until a person reviews the dispute.
+            return Transition(
+                CaseState.INVESTIGATING,
+                next_action_at=None,
+                task=TaskKind.REVIEW_DISPUTE,
+                task_summary="Customer disputes this invoice.",
+                new_dispute=reply.summary or "No reason given.",
+            )
+        case ReplyIntent.PAID_CLAIM:
+            # Until the investigator arrives (M3), a person checks the books and the bank.
+            return Transition(
+                CaseState.INVESTIGATING,
+                next_action_at=None,
+                task=TaskKind.VERIFY_PAYMENT,
+                task_summary="Customer says this invoice is already paid. Check the bank: "
+                "the payment may not be recorded in the books yet.",
+            )
         case ReplyIntent.OUT_OF_OFFICE:
             return Transition(
                 CaseState.SCHEDULED,
@@ -232,7 +254,30 @@ def on_delivery_failed(current: CaseView, reason: str) -> Transition | None:
     return _needs_human(TaskKind.ESCALATION, reason)
 
 
+def on_task_resolved(
+    current: CaseView, kind: TaskKind, action: TaskAction, policy: Policy, now: datetime
+) -> Transition | None:
+    """A person resolved a task on this case (not an approve_send task, which acts
+    on the message instead). Returns None if the case has already moved on."""
+    if current.state not in (CaseState.NEEDS_HUMAN, CaseState.INVESTIGATING):
+        return None
+    match action:
+        case TaskAction.CLOSE:
+            return Transition(CaseState.CLOSED, next_action_at=None, close_reason=CloseReason.HUMAN)
+        case TaskAction.RESUME:
+            # A case resumed at its reminder limit gets one more (final-tone)
+            # reminder before it comes back to a person; otherwise it would
+            # escalate again at once.
+            extra = 1 if current.reminders_sent >= reminder_limit(current, policy) else 0
+            return Transition(CaseState.SCHEDULED, next_action_at=now, grant_extra_reminders=extra)
+    raise WorkflowError(f"{action} does not apply to a {kind} task")
+
+
 # --- Helpers -------------------------------------------------------------------
+
+
+def reminder_limit(current: CaseView, policy: Policy) -> int:
+    return policy.max_reminders + current.extra_reminders
 
 
 def first_reminder_at(due_date: date, policy: Policy, tz: ZoneInfo) -> datetime:

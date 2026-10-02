@@ -48,6 +48,14 @@ class Policy(BaseModel):
     approval_threshold: int | None = Field(default=None, ge=0)  # minor units
     tone_steps: tuple[str, ...] = Field(default=("friendly", "firm", "final"), min_length=1)
 
+    def needs_approval(self, total_amount: int) -> bool:
+        """Must a person approve this message before it is sent?"""
+        if self.approval_mode == "all":
+            return True
+        if self.approval_mode == "above_threshold":
+            return self.approval_threshold is None or total_amount > self.approval_threshold
+        return False
+
     def tone_for(self, reminder_number: int) -> str:
         """Reminder 1 uses the first tone, 2 the second, and so on; the last tone repeats."""
         index = min(max(reminder_number, 1), len(self.tone_steps)) - 1

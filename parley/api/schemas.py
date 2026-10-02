@@ -12,6 +12,7 @@ from parley.core.domain import (
     Direction,
     InvoiceStatus,
     MessageStatus,
+    TaskAction,
     TaskKind,
     TaskStatus,
 )
@@ -66,10 +67,19 @@ class MessageOut(_FromORM):
 class TaskOut(_FromORM):
     id: uuid.UUID
     case_id: uuid.UUID
+    message_id: uuid.UUID | None
     kind: TaskKind
     summary: str
     status: TaskStatus
+    resolution: str | None
     created_at: datetime
+
+
+class ResolveTaskIn(BaseModel):
+    action: TaskAction
+    subject: str | None = None  # for "edit"
+    body: str | None = None  # for "edit"
+    note: str = ""
 
 
 class CaseDetailOut(BaseModel):

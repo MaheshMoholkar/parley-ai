@@ -9,6 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from parley.adapters.clock import FakeClock
 from parley.core.domain import CaseState, MessageStatus, TaskKind, TaskStatus
 from parley.db.models import Case, Customer, Invoice, Message, MessageCase, Task
+from parley.services.delivery import deliver_pending_messages
+from parley.services.drafting import draft_queued_messages
 from parley.services.due_cases import run_due_cases
 from parley.services.runtime import Runtime
 from parley.services.sync import sync_tenant
@@ -46,7 +48,8 @@ def test_due_cases_of_one_customer_go_out_as_one_message(rt: Runtime, tmp_path: 
     sent = messages(rt)
     assert len(sent) == 2  # one for Asha (two invoices), one for Bala
     asha = next(m for m in sent if m.to_address == "asha@example.com")
-    assert asha.status == MessageStatus.PENDING  # the outbox; delivery is a separate step
+    # Queued with the template; drafting and delivery are separate steps.
+    assert asha.status == MessageStatus.DRAFTING
     assert "A-1" in asha.body and "A-2" in asha.body
     for number in ("A-1", "A-2", "B-1"):
         c = case(rt, number)
@@ -75,19 +78,41 @@ def test_quiet_hours_delay_the_reminder(rt: Runtime, tmp_path: Path, clock: Fake
     assert c.next_action_at == datetime(2026, 1, 6, 9, 0, tzinfo=IST)
 
 
+def run_round(rt: Runtime, tenant_id: uuid.UUID) -> None:
+    """Act on due cases, then draft and deliver what was queued."""
+    run_due_cases(rt, tenant_id)
+    draft_queued_messages(rt, tenant_id)
+    deliver_pending_messages(rt, tenant_id)
+
+
 def test_weekly_cap_delays_a_third_message(rt: Runtime, tmp_path: Path, clock: FakeClock) -> None:
-    tenant_id = setup(rt, tmp_path, [ASHA_1], reminder_gap_days=1)
-    run_due_cases(rt, tenant_id)  # Monday: message 1
+    tenant_id = setup(rt, tmp_path, [ASHA_1], reminder_gap_days=1, approval_mode="none")
+    run_round(rt, tenant_id)  # Monday: message 1
     clock.advance(timedelta(days=2))
-    run_due_cases(rt, tenant_id)  # Wednesday: back to Scheduled, message 2
+    run_round(rt, tenant_id)  # Wednesday: back to Scheduled, message 2
     clock.advance(timedelta(days=2))
-    run_due_cases(rt, tenant_id)  # Friday: the cap of 2 per week is reached
+    run_round(rt, tenant_id)  # Friday: the cap of 2 per week is reached
 
     assert len(messages(rt)) == 2
     c = case(rt, "A-1")
     assert c.state == CaseState.SCHEDULED
     # Monday's message leaves the 7-day window next Monday at 10:00.
     assert c.next_action_at == datetime(2026, 1, 12, 10, 0, tzinfo=IST)
+
+
+def test_next_reminder_waits_while_the_last_one_awaits_approval(
+    rt: Runtime, tmp_path: Path, clock: FakeClock
+) -> None:
+    tenant_id = setup(rt, tmp_path, [ASHA_1], reminder_gap_days=1)  # approval_mode "all"
+    run_round(rt, tenant_id)
+    assert [m.status for m in messages(rt)] == [MessageStatus.AWAITING_APPROVAL]
+
+    clock.advance(timedelta(days=2))
+    run_round(rt, tenant_id)
+
+    assert len(messages(rt)) == 1  # no second reminder while the first is unsent
+    c = case(rt, "A-1")
+    assert (c.state, c.next_action_at) == (CaseState.SCHEDULED, rt.clock.now() + timedelta(days=1))
 
 
 def test_customer_without_email_goes_to_a_human(rt: Runtime, tmp_path: Path) -> None:

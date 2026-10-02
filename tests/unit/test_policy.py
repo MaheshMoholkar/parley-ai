@@ -89,3 +89,17 @@ def test_partial_overrides_keep_defaults() -> None:
     policy = Policy.model_validate({"reminder_gap_days": 7})
     assert policy.reminder_gap_days == 7
     assert policy.max_reminders == 4
+
+
+@pytest.mark.parametrize(
+    ("overrides", "amount", "expected"),
+    [
+        ({}, 1, True),  # default: approve everything
+        ({"approval_mode": "none"}, 10**9, False),
+        ({"approval_mode": "above_threshold", "approval_threshold": 500_000}, 500_000, False),
+        ({"approval_mode": "above_threshold", "approval_threshold": 500_000}, 500_001, True),
+        ({"approval_mode": "above_threshold"}, 1, True),  # no threshold set: be safe
+    ],
+)
+def test_needs_approval(overrides: dict[str, object], amount: int, expected: bool) -> None:
+    assert Policy.model_validate(overrides).needs_approval(amount) is expected

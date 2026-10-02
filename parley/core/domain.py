@@ -58,6 +58,21 @@ class ReplyIntent(StrEnum):
     OTHER = "other"
 
 
+class TaskAction(StrEnum):
+    """What a person can do with a task."""
+
+    APPROVE = "approve"  # approve_send: send the draft as it is
+    EDIT = "edit"  # approve_send: send an edited version
+    REJECT = "reject"  # approve_send: do not send this reminder
+    RESUME = "resume"  # other tasks: go back to chasing
+    CLOSE = "close"  # other tasks: stop chasing this invoice
+
+
+class DisputeStatus(StrEnum):
+    OPEN = "open"
+    RESOLVED = "resolved"
+
+
 class PromiseStatus(StrEnum):
     OPEN = "open"
     KEPT = "kept"
@@ -65,9 +80,22 @@ class PromiseStatus(StrEnum):
 
 
 class MessageStatus(StrEnum):
+    # Outbound: drafting -> (awaiting_approval ->) pending -> sent
+    DRAFTING = "drafting"  # queued; the drafter has not written it yet
+    AWAITING_APPROVAL = "awaiting_approval"  # a person must approve, edit or reject it
     PENDING = "pending"  # written to the outbox, not yet handed to the channel
     SENT = "sent"
     FAILED = "failed"  # gave up after repeated delivery errors
+    REJECTED = "rejected"  # a reviewer chose not to send it
+    # Inbound: received -> read
+    RECEIVED = "received"  # stored, not yet read by the reply reader
+    READ = "read"
+
+
+# Outbound messages that have not gone out yet but will (or may).
+UNSENT_STATUSES = frozenset(
+    {MessageStatus.DRAFTING, MessageStatus.AWAITING_APPROVAL, MessageStatus.PENDING}
+)
 
 
 class Direction(StrEnum):

@@ -11,6 +11,7 @@ from parley.core.domain import (
     InvoiceStatus,
     PromiseStatus,
     ReplyIntent,
+    TaskAction,
     TaskKind,
 )
 from parley.core.policy import Policy
@@ -26,6 +27,7 @@ from parley.core.workflow import (
     on_delivery_failed,
     on_reply,
     on_source_update,
+    on_task_resolved,
     on_timer,
 )
 
@@ -132,11 +134,19 @@ def test_invalid_promise_goes_to_a_human(reply: Reply) -> None:
     assert t.new_promise is None
 
 
-@pytest.mark.parametrize("intent", [ReplyIntent.DISPUTE, ReplyIntent.PAID_CLAIM])
-def test_dispute_or_paid_claim_starts_an_investigation(intent: ReplyIntent) -> None:
-    t = on_reply(case(CaseState.AWAITING_REPLY), Reply(intent), POLICY, NOW, IST)
-    assert t.state == CaseState.INVESTIGATING
-    assert t.next_action_at is None
+def test_dispute_stops_outreach_and_records_the_dispute() -> None:
+    reply = Reply(ReplyIntent.DISPUTE, summary="Says half the goods arrived damaged.")
+    t = on_reply(case(CaseState.AWAITING_REPLY), reply, POLICY, NOW, IST)
+    assert (t.state, t.next_action_at) == (CaseState.INVESTIGATING, None)
+    assert t.task == TaskKind.REVIEW_DISPUTE
+    assert t.new_dispute == "Says half the goods arrived damaged."
+
+
+def test_paid_claim_asks_a_person_to_check_the_bank() -> None:
+    t = on_reply(case(CaseState.AWAITING_REPLY), Reply(ReplyIntent.PAID_CLAIM), POLICY, NOW, IST)
+    assert (t.state, t.next_action_at) == (CaseState.INVESTIGATING, None)
+    assert t.task == TaskKind.VERIFY_PAYMENT
+    assert "not be recorded in the books yet" in t.task_summary
 
 
 def test_out_of_office_tries_again_after_the_gap() -> None:
@@ -227,3 +237,42 @@ def test_failed_delivery_hands_the_case_to_a_human() -> None:
 
 def test_first_reminder_is_due_at_the_start_of_due_date_plus_delay() -> None:
     assert first_reminder_at(date(2026, 1, 1), POLICY, IST) == datetime(2026, 1, 4, tzinfo=IST)
+
+
+# --- Task resolution -------------------------------------------------------------------
+
+
+def test_closing_a_task_closes_the_case() -> None:
+    t = on_task_resolved(
+        case(CaseState.NEEDS_HUMAN), TaskKind.REVIEW_REPLY, TaskAction.CLOSE, POLICY, NOW
+    )
+    assert t is not None
+    assert (t.state, t.close_reason) == (CaseState.CLOSED, CloseReason.HUMAN)
+
+
+def test_resuming_goes_back_to_scheduled_now() -> None:
+    current = case(CaseState.INVESTIGATING, reminders_sent=2)
+    t = on_task_resolved(current, TaskKind.REVIEW_DISPUTE, TaskAction.RESUME, POLICY, NOW)
+    assert t is not None
+    assert (t.state, t.next_action_at, t.grant_extra_reminders) == (CaseState.SCHEDULED, NOW, 0)
+
+
+def test_resuming_at_the_reminder_limit_allows_one_more_reminder() -> None:
+    at_limit = case(CaseState.NEEDS_HUMAN, reminders_sent=POLICY.max_reminders)
+    t = on_task_resolved(at_limit, TaskKind.ESCALATION, TaskAction.RESUME, POLICY, NOW)
+    assert t is not None and t.grant_extra_reminders == 1
+
+    resumed = CaseView(CaseState.SCHEDULED, POLICY.max_reminders, NOW, 100_000, extra_reminders=1)
+    assert on_timer(resumed, POLICY, NOW, ContactNow()).send_reminder
+
+
+def test_resolving_a_task_on_a_case_that_moved_on_changes_nothing() -> None:
+    closed = case(CaseState.CLOSED, close_reason=CloseReason.PAID)
+    assert on_task_resolved(closed, TaskKind.ESCALATION, TaskAction.RESUME, POLICY, NOW) is None
+
+
+def test_approval_actions_do_not_apply_to_case_tasks() -> None:
+    with pytest.raises(WorkflowError):
+        on_task_resolved(
+            case(CaseState.NEEDS_HUMAN), TaskKind.ESCALATION, TaskAction.APPROVE, POLICY, NOW
+        )

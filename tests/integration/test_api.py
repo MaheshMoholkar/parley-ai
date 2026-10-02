@@ -54,7 +54,7 @@ def test_sync_then_list_and_read_cases(client: TestClient, rt: Runtime, tmp_path
     detail = client.get(f"/v1/cases/{case_id}", headers=auth).json()
     assert detail["case"]["state"] == "awaiting_reply"
     assert len(detail["messages"]) == 1
-    assert detail["messages"][0]["status"] == "pending"
+    assert detail["messages"][0]["status"] == "drafting"
 
 
 def test_pause_and_resume(client: TestClient, rt: Runtime, tmp_path: Path) -> None:

@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.13",
+    "anthropic[bedrock]>=1.11.0",
+    "boto3>=1.43.107",
     "fastapi>=0.115",
     "psycopg[binary]>=3.2",
     "pydantic>=2.8",
@@ -94,3 +96,16 @@ name = "services do not depend on the API"
 type = "forbidden"
 source_modules = ["parley.services", "parley.db"]
 forbidden_modules = ["parley.api", "fastapi"]
+
+[[tool.importlinter.contracts]]
+name = "model jobs only build prompts and call the model port"
+type = "forbidden"
+source_modules = ["parley.collections_ai"]
+forbidden_modules = [
+    "parley.adapters",
+    "parley.db",
+    "parley.services",
+    "parley.api",
+    "sqlalchemy",
+    "fastapi",
+]

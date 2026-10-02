@@ -40,6 +40,7 @@ from parley.core.domain import (
     CaseState,
     CloseReason,
     Direction,
+    DisputeStatus,
     InvoiceStatus,
     MessageStatus,
     PromiseStatus,
@@ -101,6 +102,8 @@ class Tenant(Base):
     # SHA-256 of the API key. The key itself is shown once and never stored.
     api_key_hash: Mapped[str] = mapped_column(String(64), unique=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Static payment link or UPI id included in reminders, if the tenant set one.
+    payment_link: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = _created_at()
 
     @property
@@ -192,6 +195,8 @@ class Case(Base):
     paused: Mapped[bool] = mapped_column(Boolean, default=False)
     next_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reminders_sent: Mapped[int] = mapped_column(Integer, default=0)
+    # Reminders a person allowed beyond the policy limit when resuming the case.
+    extra_reminders: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_reason: Mapped[CloseReason | None] = mapped_column(_enum(CloseReason))
@@ -207,6 +212,7 @@ class Case(Base):
             next_action_at=self.next_action_at,
             amount_due=self.invoice.amount_due,
             close_reason=self.closed_reason,
+            extra_reminders=self.extra_reminders,
         )
 
 
@@ -222,6 +228,11 @@ class Message(Base):
     channel: Mapped[str] = mapped_column(String(32))
     direction: Mapped[Direction] = mapped_column(_enum(Direction))
     to_address: Mapped[str] = mapped_column(String(320))
+    # Inbound only: who sent it.
+    from_address: Mapped[str | None] = mapped_column(String(320))
+    # Outbound only: random token in the Reply-To address, so a reply finds this
+    # message (and its cases) without trusting the subject line.
+    reply_token: Mapped[str | None] = mapped_column(String(64), unique=True)
     subject: Mapped[str] = mapped_column(String(500))
     body: Mapped[str] = mapped_column(Text)
     status: Mapped[MessageStatus] = mapped_column(_enum(MessageStatus))
@@ -268,6 +279,18 @@ class Promise(Base):
     created_at: Mapped[datetime] = _created_at()
 
 
+class Dispute(Base):
+    __tablename__ = "disputes"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_fk()
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id"), index=True)
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[DisputeStatus] = mapped_column(_enum(DisputeStatus))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Task(Base):
     """Work for a human: an escalation, a reply to review, a draft to approve, ..."""
 
@@ -276,9 +299,49 @@ class Task(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = _tenant_fk()
     case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id"), index=True)
+    # For approve_send tasks: the message waiting for approval.
+    message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id"))
     kind: Mapped[TaskKind] = mapped_column(_enum(TaskKind))
     summary: Mapped[str] = mapped_column(Text)
     status: Mapped[TaskStatus] = mapped_column(_enum(TaskStatus), default=TaskStatus.OPEN)
     resolution: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ModelCall(Base):
+    """One model call, kept for cost reporting, debugging and evals."""
+
+    __tablename__ = "model_calls"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_fk()
+    message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id"), index=True)
+    prompt_version: Mapped[str] = mapped_column(String(64))
+    tier: Mapped[str] = mapped_column(String(16))
+    model: Mapped[str | None] = mapped_column(String(100))
+    ok: Mapped[bool] = mapped_column(Boolean)
+    error: Mapped[str | None] = mapped_column(Text)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    # Estimated cost in millionths of a US dollar (whole numbers, like money).
+    cost_micro_usd: Mapped[int] = mapped_column(BigInteger, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class UnmatchedInbound(Base):
+    """Inbound mail that could not be matched to a case. Not tenant-scoped,
+    because without a match the tenant is unknown; an operator reviews these."""
+
+    __tablename__ = "unmatched_inbound"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    from_address: Mapped[str] = mapped_column(String(320))
+    to_addresses: Mapped[str] = mapped_column(Text)
+    subject: Mapped[str] = mapped_column(String(500))
+    body: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(String(200))

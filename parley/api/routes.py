@@ -16,6 +16,7 @@ from parley.api.schemas import (
     CasePage,
     CustomerOut,
     MessageOut,
+    ResolveTaskIn,
     SyncOut,
     TaskOut,
     TaskPage,
@@ -25,6 +26,7 @@ from parley.db.models import Case, Message, MessageCase, Task
 from parley.services.accounting import AdapterConfigError
 from parley.services.cases import NotFoundError, set_case_paused, set_customer_paused
 from parley.services.sync import SyncError, sync_tenant
+from parley.services.tasks import TaskError, resolve_task
 
 router = APIRouter()
 
@@ -140,6 +142,29 @@ def list_tasks(
     return TaskPage(
         items=[TaskOut.model_validate(t) for t in tasks], total=total, limit=limit, offset=offset
     )
+
+
+@router.post("/v1/tasks/{task_id}/resolve")
+def resolve(
+    session: SessionDep, rt: RuntimeDep, tenant: TenantDep, task_id: uuid.UUID, body: ResolveTaskIn
+) -> TaskOut:
+    """Approve, edit or reject a draft; or resume or close the case behind a task."""
+    try:
+        task = resolve_task(
+            session,
+            tenant,
+            task_id,
+            body.action,
+            rt.clock.now(),
+            body.subject,
+            body.body,
+            body.note,
+        )
+    except NotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found") from None
+    except TaskError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.problems) from None
+    return TaskOut.model_validate(task)
 
 
 def _set_case_paused(

@@ -8,6 +8,7 @@ as the case changes.
 """
 
 import logging
+import secrets
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from parley.core.domain import (
     TIMED_STATES,
+    UNSENT_STATUSES,
     CaseState,
     Direction,
     MessageStatus,
@@ -31,6 +33,9 @@ from parley.services.cases import apply_transition
 from parley.services.runtime import Runtime
 
 log = logging.getLogger(__name__)
+
+# Messages that count toward the weekly contact cap: sent, or on their way.
+COUNTS_AS_CONTACT = UNSENT_STATUSES | {MessageStatus.SENT}
 
 # While a customer is on hold (a dispute or payment claim is being looked at),
 # their due cases are checked again after this long.
@@ -145,18 +150,30 @@ def _contact_decision(
     """May this customer be sent a message right now?"""
     if not customer.email:
         return CannotContact("Customer has no email address.")
-    if _is_on_hold(session, customer):
+    if _is_on_hold(session, customer) or _has_unsent_message(session, customer):
         return ContactLater(now + HOLD_RECHECK)
 
     recent = session.scalars(
         select(Message.created_at).where(
             Message.customer_id == customer.id,
             Message.direction == Direction.OUTBOUND,
+            Message.status.in_(COUNTS_AS_CONTACT),
             Message.created_at > now - CONTACT_WINDOW,
         )
     ).all()
     allowed_at = contact_allowed_at(now, tenant.zone, tenant.policy, recent)
     return ContactNow() if allowed_at <= now else ContactLater(allowed_at)
+
+
+def _has_unsent_message(session: Session, customer: Customer) -> bool:
+    """One reminder at a time: wait while the last one is still being drafted,
+    awaits approval, or waits for delivery."""
+    unsent = select(Message.id).where(
+        Message.customer_id == customer.id,
+        Message.direction == Direction.OUTBOUND,
+        Message.status.in_(UNSENT_STATUSES),
+    )
+    return bool(session.scalar(select(unsent.exists())))
 
 
 def _is_on_hold(session: Session, customer: Customer) -> bool:
@@ -180,8 +197,12 @@ def _is_on_hold(session: Session, customer: Customer) -> bool:
 def _queue_reminder(
     session: Session, tenant: Tenant, customer: Customer, cases: list[Case], now: datetime
 ) -> None:
-    """Write one pending outbound message covering all `cases` (the outbox).
-    `deliver_pending_messages` sends it after this transaction commits."""
+    """Queue one outbound message covering all `cases`, in status `drafting`.
+
+    The fixed template is written now as a safe fallback. The drafting step then
+    replaces it with a model draft (if a model is configured) and decides whether
+    a person must approve it; delivery sends it after that. Keeping model calls
+    out of this transaction means the customer lock is held only briefly."""
     assert customer.email is not None  # checked by _contact_decision
     for case in cases:
         case.reminders_sent += 1
@@ -208,8 +229,9 @@ def _queue_reminder(
         to_address=customer.email,
         subject=subject,
         body=body,
-        status=MessageStatus.PENDING,
+        status=MessageStatus.DRAFTING,
         idempotency_key=uuid.uuid4().hex,
+        reply_token=secrets.token_hex(16),
         attempts=0,
         created_at=now,
     )
