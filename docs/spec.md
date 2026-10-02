@@ -50,24 +50,29 @@ Invoices and payments enter from the left through an accounting adapter. Message
 **Repo layout**
 
 ```text
-collections-agent/
-  core/                 domain model, workflow, policy; no I/O
-  ports/                interfaces: accounting, channel, model, handoff
-  adapters/
-    accounting/csv/
-    accounting/vyavasay/
-    channels/email_ses/
-    channels/voice/
-    models/bedrock/
+parley-ai/
+  parley/
+    core/               domain types, money, policy, case state machine; no I/O
+    ports/              interfaces: accounting, channel, clock (model, handoff later)
+    adapters/
+      accounting/csv/
+      accounting/vyavasay/
+      channels/dry_run/ records messages instead of sending (M1)
+      channels/email_ses/
+      channels/voice/
+      models/bedrock/
+    db/                 tables, sessions, migrations
+    services/           use cases: sync, run due cases, deliver messages
+    collections_ai/     prompts, tools, reply reader, drafter, investigator
+    api/                FastAPI app, webhooks, review screen
   harness/              generic agent loop, tool registry, limits, tracing
   evalkit/              generic eval runner, judges, reporting
-  collections_ai/       prompts, tools, reply reader, drafter, investigator
-  api/                  FastAPI app, webhooks, review screen
   evals/                datasets and scenarios for this project
   tests/
+  docs/                 this spec and other design notes
 ```
 
-`core/` imports only `ports/`. `harness/` and `evalkit/` import nothing from the rest of the repo.
+`parley/core/` imports only `parley/ports/`. `harness/` and `evalkit/` import nothing from `parley/`. CI enforces both with import-linter.
 
 ## Canonical data model
 
@@ -75,15 +80,16 @@ The core keeps its own copy of customers, invoices and payments in one fixed sha
 
 | Table | Key fields | Owner |
 | --- | --- | --- |
-| `tenant` | name, policy settings, adapter config, default language | Core |
+| `tenant` | name, timezone, policy settings, adapter config, default language, API key hash | Core |
 | `customer` | source, external\_id, name, contacts, language, brief, paused | Source system (brief and paused: core) |
-| `invoice` | source, external\_id, customer\_id, number, amount\_due, currency, due\_date, status, display\_details | Source system |
+| `invoice` | source, external\_id, customer\_id, number, amount\_due, currency, due\_date, status (open, paid, void, removed), display\_details | Source system |
 | `payment` | source, external\_id, customer\_id, amount, paid\_on, reference | Source system |
-| `case` | invoice\_id, state, next\_action\_at, reminders\_sent, opened\_at, closed\_at | Core |
-| `contact_log` | case\_id, channel, direction, body or transcript, sent\_at, idempotency\_key, prompt\_version | Core |
+| `case` | invoice\_id (one case per invoice), state, paused, next\_action\_at, reminders\_sent, opened\_at, closed\_at, closed\_reason | Core |
+| `message` | customer\_id, channel, direction, subject, body or transcript, status (pending, sent, failed), idempotency\_key, provider\_message\_id, sent\_at, prompt\_version | Core |
+| `message_case` | message\_id, case\_id, reminder\_number; unique (case\_id, reminder\_number) | Core |
 | `promise` | case\_id, amount, promised\_date, status (open, kept, broken), source contact | Core |
 | `dispute` | case\_id, reason, evidence ids, status | Core |
-| `task` | case\_id, kind (approve\_send, verify\_payment, review\_dispute), summary, status, resolution | Core |
+| `task` | case\_id, kind (escalation, review\_reply, approve\_send, verify\_payment, review\_dispute), summary, status, resolution | Core |
 | `agent_run` | case\_id, steps, tokens, cost, outcome | Core |
 
 **Rules**
@@ -93,7 +99,9 @@ The core keeps its own copy of customers, invoices and payments in one fixed sha
 - The core never edits an invoice amount or marks an invoice paid. Those changes arrive only from the source system.
 - No tax fields. Anything the message needs beyond amount and due date arrives as `display_details` text.
 - Money is stored as whole minor units (paise) plus a currency code.
-- `contact_log.idempotency_key` is unique per case and step, so a retried send goes out once.
+- One message can cover several invoices of the same customer, so `message_case` links a message to each case it reminds about.
+- `message_case` is unique on `(case_id, reminder_number)`, so a retried step can never record the same reminder twice.
+- Sends use an outbox: the message row is written as `pending` in the same transaction as the case change, and a separate step delivers pending rows and marks them `sent`. A crash between the two leaves a `pending` row that is retried with the same `idempotency_key`, never a second message.
 
 ## Accounting interface
 
@@ -101,10 +109,18 @@ Every source system connects through one interface (the port) of four read metho
 
 | Method | Returns |
 | --- | --- |
-| `list_open_invoices(since)` | Open invoices changed since a date |
-| `get_invoice(external_id)` | One invoice with its current amount due and status |
-| `get_customer_contacts(customer_external_id)` | Names, emails and phone numbers for the customer |
+| `list_open_invoices()` | Every invoice that is open in the source right now |
+| `get_invoice(external_id)` | One invoice with its current amount due and status, or nothing if the source no longer has it |
+| `get_customer(customer_external_id)` | Name, email and phone number for the customer |
 | `list_payments_since(date, customer)` | Payments or bank lines recorded since a date |
+
+`list_open_invoices()` returns the complete list, not a "changed since" list. Sync needs the full set to notice an invoice that left the open list, and a business has at most a few thousand open invoices. Any invoice the core still holds as open that is missing from the list is looked up with `get_invoice`, and marked `removed` if the source no longer returns it.
+
+**What every adapter must guarantee**
+
+- `amount_due` is net of payments and of credit notes already applied in the source.
+- `due_date` is always set. If the source has none, the adapter derives it (for example invoice date plus credit days) and says so in `display_details`.
+- Amounts are converted to minor units by the adapter, never by the core.
 
 Each adapter also declares two optional capabilities.
 
@@ -114,7 +130,8 @@ Each adapter also declares two optional capabilities.
 **CSV adapter (built first)**
 
 - Reads an aging report file and an optional payments file.
-- Columns: invoice number, customer name, email, phone, amount due, currency, due date.
+- Columns: invoice number, customer id (optional, defaults to the customer name), customer name, email, phone, amount due, currency, due date.
+- An invoice missing from a newer file is treated as no longer open.
 - No events and no write-back.
 - Used for the demo and for every eval run.
 
@@ -124,17 +141,23 @@ Each adapter also declares two optional capabilities.
 - Receives Vyavasay webhooks and translates them into the four events.
 - Vyavasay needs only this: four read endpoints, two webhooks (invoice posted, payment recorded), and optionally a panel that reads case status from the core's API.
 
-**Boundary check:** a search of the repo for "Vyavasay" or "GST" must return hits only inside `adapters/accounting/vyavasay/`. CI runs this check.
+**Boundary check:** a search of the code for "Vyavasay" or "GST" must return hits only inside `parley/adapters/accounting/vyavasay/`. `docs/` is excluded. CI runs this check.
 
 ## Collections workflow
 
 One case per overdue invoice moves through a fixed set of states, and code decides every move; the model never chooses who is contacted or when.
 
-The workflow lives in the service itself. Each case row holds a `state` and a `next_action_at` time, and a worker picks up due cases with a row lock so two workers never act on the same case.
+The workflow lives in the service itself. Each case row holds a `state` and a `next_action_at` time. A worker picks up customers that have due cases, locking the customer row so two workers never act on the same customer, and handles all of that customer's due cases together.
 
 &#91;embedded content: case states · 6 states, main transitions\]
 
-A payment recorded by the source system closes a case from any state. The table lists every transition, including the reminder limit and pause.
+The six states are Scheduled, Awaiting reply, Promised, Investigating, Needs human and Closed. Pause is a flag on the case or the customer, not a state: a paused case keeps its state and timer, and nothing is sent until it is resumed. If its timer passed while paused, it acts at the next allowed time.
+
+**One message per customer.** When several of a customer's cases are due for a reminder at the same time, they go out as one message that lists every invoice. The tone is the firmest tone among those cases. The weekly contact cap therefore counts messages, not invoices.
+
+**Disputes hold the customer.** While any of a customer's cases is Investigating, or Needs human for a dispute review, no reminder goes to that customer about any invoice.
+
+A source update that sets the invoice to paid (amount due zero), void or removed closes the case from any state. The table lists every transition, including the reminder limit.
 
 | From | Trigger | To | Action |
 | --- | --- | --- | --- |
@@ -144,11 +167,18 @@ A payment recorded by the source system closes a case from any state. The table 
 | Awaiting reply | Reply read as a promise | Promised | Record the promise, sleep until date plus grace |
 | Promised | Date plus grace passes with no payment | Scheduled | Mark the promise broken |
 | Awaiting reply | Reply read as a payment claim or dispute | Investigating | Stop outreach, run the investigator |
+| Awaiting reply | Reply read as out of office | Scheduled | Try again after the reminder gap; the reminder count is unchanged |
+| Awaiting reply | Reply read as a question, wrong contact or other | Needs human | Create a `review_reply` task |
 | Investigating | Investigator returns a finding | Needs human | Create a task with the evidence |
-| Scheduled | Reminder limit reached | Needs human | Create an escalation task |
+| Scheduled | Reminder limit reached | Needs human | Create an `escalation` task |
+| Scheduled | Quiet hours or weekly cap reached | Scheduled | Move `next_action_at` to the next allowed time |
 | Needs human | Human resolves the task | Scheduled or Closed | Follow the resolution |
-| Any | `payment.recorded` covers the amount due | Closed | Mark open promises kept |
-| Any | Customer or case paused | Paused | Send nothing until resumed |
+| Any | Source shows the invoice paid (amount due zero) | Closed (paid) | Mark open promises kept |
+| Any | Source shows the invoice void or no longer returns it | Closed (void or removed) | Cancel open tasks |
+| Any open state | Amount due changes but stays above zero (partial payment, credit note) | Same state | Later messages use the new amount |
+| Closed (paid, void or removed) | Source shows the invoice open again | Scheduled | Reopen the same case |
+
+A case closed by a human stays closed even if the source still shows the invoice open. One invoice never gets a second case.
 
 **Policy settings (per tenant)**
 
@@ -160,7 +190,7 @@ The values below are starting defaults to adjust, not fixed rules.
 | `reminder_gap_days` | 5 | Wait between reminders with no reply |
 | `max_reminders` | 4 | Reminders before the case goes to a human |
 | `max_contacts_per_week` | 2 | Cap per customer across all channels |
-| `quiet_hours` | 20:00 to 09:00, Sundays | No outbound contact in the customer's local time |
+| `quiet_hours` | 20:00 to 09:00, Sundays | No outbound contact in this window, in the tenant's timezone |
 | `promise_grace_days` | 1 | Extra days before a promise counts as broken |
 | `max_promise_window_days` | 30 | A promise dated later than this goes to a human |
 | `approval_mode` | all | `all`, `above_threshold` or `none` |
@@ -226,6 +256,7 @@ Each tool calls the accounting interface or the core's own tables, never a sourc
 **Finding**
 
 - `result`: `payment_found`, `partial_payment`, `payment_not_found`, `dispute_needs_human` or `unclear`.
+- `payment_not_found` means "not recorded in the books yet", not "not paid". Many accounting systems have no bank feed, so money can be in the bank before anyone records it. The task summary says this, and the human checks the bank.
 - `evidence_ids`: the payment, invoice or contact rows that support it.
 - `summary`: two or three sentences for the human who picks up the task.
 
@@ -268,6 +299,7 @@ Both need sender registration in India, so they stay out of the first version. T
 - Languages: Hindi, Indian English and mixed Hindi-English. Marathi is [not on the supported list](https://docs.aws.amazon.com/nova/latest/nova2-userguide/sonic-language-support.html).
 - Voice service: a small bridge that passes audio between the telephony provider and the model, and runs tool calls against the core.
 - Tools on a call: `get_invoice`, `log_promise`, `log_dispute`, `send_payment_link`, `transfer_to_human`.
+- `log_promise` and `log_dispute` only propose a record. Code checks every field the same way it checks a record read from email, before anything is saved.
 - Build order: browser microphone, then tools, then a phone number, then outbound calls started by the workflow.
 
 **Voice rules**
@@ -294,7 +326,7 @@ Safety comes from five layers placed at different points in the flow, and four o
 
 **Prompt-injection rule**
 
-Inbound email and call audio are untrusted. They can produce only a proposed `promise`, `dispute` or `paid_claim` record, and code validates each field before saving. No inbound text can trigger a write tool, change policy, or reach another tenant's data.
+Inbound email and call audio are untrusted. They can produce only a proposed `promise`, `dispute` or `paid_claim` record, and code validates each field before saving. On a call this is what `log_promise` and `log_dispute` do; they are the only tools that propose writes, and no tool edits an invoice, payment, policy or another tenant's data.
 
 **Output check details**
 
@@ -347,7 +379,9 @@ Three layers of evals run from the CSV adapter in CI, and a change that makes an
 - Wrong-amount drafts: zero.
 - Policy violations: zero.
 - Injection tests: all blocked.
-- Accuracy metrics: thresholds are set from the first baseline run, and CI fails on a drop of more than 2 points.
+- Accuracy metrics: thresholds are set from the first baseline run. CI fails when a metric drops by more than its noise margin, which is computed from the size of the test set (on 50 examples one example is 2 points, so a fixed 2-point gate would fail at random).
+
+**When model evals run:** unit tests and the guardrail tests run on every pull request. The model-calling evals run on pull requests that touch prompts or `parley/collections_ai/`, and nightly on the main branch, because they cost money and need cloud credentials.
 
 **Test set discipline:** the labelled replies are split once into a development set and a held-out test set. Prompts are tuned only against the development set.
 
@@ -387,7 +421,7 @@ Seven milestones, each a working product on its own, so the build can stop after
 
 | # | Build | Done when |
 | --- | --- | --- |
-| M1 | Core tables, CSV adapter, sync, case state machine, simulated clock. No model calls. | A CSV of 20 invoices produces the right cases and due actions across a simulated 30 days. |
+| M1 | Core tables, CSV adapter, sync, case state machine, simulated clock, dry-run channel with a fixed reminder template. No model calls. | A CSV of 20 invoices produces the right cases and due actions across a simulated 30 days. |
 | M2 | Email loop: drafting, SES send and receive, reply reader, promise and dispute records, workflow rules, output checks, idempotent sends, review screen. | The four-round walkthrough (reminder, promise, broken promise, dispute) passes against your own inbox. |
 | M3 | Investigator harness as its own package, the four tools, the run log. | A seeded "we already paid" claim returns the right finding with valid evidence ids, and the step cap holds. |
 | M4 | Evals: labelled replies, investigator scenarios, debtor personas, `evalkit/`, CI gate. | CI blocks a pull request that deliberately worsens the reply-reading prompt. |
@@ -401,8 +435,8 @@ M1 to M4 are the resume-ready core. M5 to M7 each add one distinct skill: safety
 
 Each item below has an assumed answer that the rest of the spec uses; change any of them before M1 starts.
 
-- [ ] **Language and framework.** Assumed: Python with FastAPI and PostgreSQL.
-- [ ] **Workflow engine.** Assumed: a worker inside the service that reads due cases from PostgreSQL. This runs locally and in evals with no cloud dependency. The alternative is AWS Step Functions.
+- [x] **Language and framework.** Decided: Python 3.12+, FastAPI, SQLAlchemy 2 (synchronous), Alembic and PostgreSQL.
+- [x] **Workflow engine.** Decided: a worker inside the service that reads due cases from PostgreSQL. This runs locally and in evals with no cloud dependency. The alternative is AWS Step Functions.
 - [ ] **Hosting.** Assumed: Docker Compose for development; one container (API plus worker) on ECS Fargate with RDS for the deployed demo.
 - [ ] **Approval mode at launch.** Assumed: `all`, so every outgoing message is approved by a human until the evals are in place.
 - [ ] **Payment link.** Assumed: one static link or UPI id per tenant in config. The alternative is a per-invoice link supplied by the accounting adapter.
