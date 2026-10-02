@@ -7,6 +7,7 @@ with a FakeClock and a DryRunChannel.
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
+from harness import AgentModel, Limits
 from parley.db.models import Tenant
 from parley.db.session import SessionFactory
 from parley.ports.accounting import AccountingPort
@@ -24,6 +25,9 @@ class Runtime:
     accounting_for: Callable[[Tenant], AccountingPort] = field(default=accounting_adapter_for)
     # None means "no model": reminders use the fixed template.
     model: ModelPort | None = None
+    # The investigator's model; None means claims go straight to a person.
+    agent_model: AgentModel | None = None
+    agent_limits: Limits = field(default_factory=Limits)
     # Signs inbound email posts; empty means inbound email is refused.
     inbound_secret: str = ""
     # USD per million tokens (input, output), keyed by model id.

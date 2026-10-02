@@ -14,6 +14,7 @@ from parley.adapters.models.fake import FakeCall, FakeModel
 from parley.api.app import create_app
 from parley.collections_ai.jobs import BriefOut, ReplyReading
 from parley.core.domain import (
+    AgentRunStatus,
     CaseState,
     Direction,
     DisputeStatus,
@@ -23,6 +24,7 @@ from parley.core.domain import (
     TaskKind,
 )
 from parley.db.models import (
+    AgentRun,
     Case,
     Customer,
     Dispute,
@@ -33,6 +35,7 @@ from parley.db.models import (
     Task,
     UnmatchedInbound,
 )
+from parley.services.investigation import run_investigations
 from parley.services.replies import read_received_replies
 from parley.services.runtime import Runtime
 from parley.services.worker import run_tenant_once
@@ -254,6 +257,12 @@ def test_dispute_is_recorded_and_holds_the_case(
     with rt.session_factory() as session:
         dispute = session.scalars(select(Dispute)).one()
         assert (dispute.status, dispute.reason) == (DisputeStatus.OPEN, "says dispute")
+        run = session.scalars(select(AgentRun)).one()
+        assert (run.claim, run.status) == (ReplyIntent.DISPUTE, AgentRunStatus.QUEUED)
+
+    # With no investigator model, the claim goes straight to a person.
+    run_investigations(rt, case(rt, "A-1").tenant_id)
+    assert case(rt, "A-1").state == CaseState.NEEDS_HUMAN
     assert [t.kind for t in tasks(rt)] == [TaskKind.REVIEW_DISPUTE]
 
 
@@ -307,8 +316,10 @@ def test_email_saying_mark_as_paid_changes_nothing(
         assert session.scalar(select(func.count()).select_from(Payment)) == 0
         invoice = session.scalars(select(Invoice)).one()
         assert invoice.amount_due == 100000
-    # A person verifies; nothing is closed on the customer's word.
+    # Nothing is closed on the customer's word: it is investigated, then a person verifies.
     assert case(rt, "A-1").state == CaseState.INVESTIGATING
+    run_investigations(rt, case(rt, "A-1").tenant_id)
+    assert case(rt, "A-1").state == CaseState.NEEDS_HUMAN
     assert [t.kind for t in tasks(rt)] == [TaskKind.VERIFY_PAYMENT]
 
 

@@ -3,12 +3,14 @@
 A collections agent: it chases overdue invoices for a business and hands a human
 only the cases that need judgement. The full design is in [docs/spec.md](docs/spec.md).
 
-**Status: milestones M1 and M2.** The service syncs invoices from a CSV aging
+**Status: milestones M1 to M3.** The service syncs invoices from a CSV aging
 report, runs each overdue invoice through the case state machine, drafts
 reminders with Claude (on Amazon Bedrock) and checks every draft in code, sends
 email through Amazon SES, reads customer replies, and records promises and
-disputes. A person approves drafts and takes over unclear cases on a small review
-screen. Next: the investigator (M3) and the eval suite (M4).
+disputes. When a customer says "we already paid" or disputes an invoice, an
+investigator agent checks the records with read-only tools and hands a person a
+finding backed by record ids. A person approves drafts and takes over unclear
+cases on a small review screen. Next: the eval suite (M4).
 
 By default it runs with no model and no email provider: reminders use a fixed
 template and are recorded instead of sent. See "Turning on the model and email".
@@ -70,6 +72,16 @@ payment claim, and code validates each field before the state machine acts.
 Every model call is logged with its prompt version, tokens, estimated cost and
 latency in the `model_calls` table.
 
+**The investigator.** A paid claim or dispute queues a run in `agent_runs`. The
+agent (the large model) may only call four read-only tools, all limited to that
+one customer: `get_invoice`, `search_payments`, `get_contact_history` and
+`get_promises`. It must finish with a finding and the ids of the records it
+relied on. Code checks every id exists for that customer; a finding that cites
+missing or wrong records is set aside as "unclear". Either way a person gets the
+task: the investigator never closes a case or records a payment. Limits per run:
+8 steps, 2 tool retries, 20 rows per tool result, 60 seconds. Every step is
+stored in the run, so a run can be replayed and scored.
+
 To run everything in containers, use `docker compose up --build`. Put CSV files in
 `./data`, and pass `/data/<file>.csv` as the path when you create the tenant.
 
@@ -93,6 +105,8 @@ The database tests use `PARLEY_TEST_DATABASE_URL`, which defaults to a
 ## Layout
 
 ```text
+harness/         generic agent loop, tool registry, limits, run log; knows
+                 nothing about invoices (CI enforces this)
 parley/
   core/          pure rules: no database, no network. Start reading here.
     domain.py      names: case states, task kinds, statuses
@@ -110,7 +124,7 @@ parley/
   adapters/      implementations of the ports
     accounting/csv/  reads an aging report CSV
     channels/      dry run, SES sending, inbound email parsing
-    models/        Claude on Bedrock, and a fake model for tests
+    models/        Claude on Bedrock (single calls and agent sessions), a fake
     clock.py       real clock and fake clock
   db/            tables (models.py), connections, migrations
   services/      use cases that load data, call the core and save results
@@ -119,6 +133,7 @@ parley/
     drafting.py    draft queued reminders, run checks, apply the approval gate
     inbound.py     receive and match a customer's email reply
     replies.py     read replies and act on them; update the customer brief
+    investigation.py  the investigator's tools, runs, and the check on findings
     tasks.py       a person approving, editing, rejecting, resuming, closing
     delivery.py    send pending messages from the outbox
     worker.py      the background loop that runs all of the above
@@ -129,6 +144,8 @@ tests/
   integration/   services and API against a real Postgres
     test_simulation_30_days.py   the M1 acceptance test
     test_walkthrough.py          the M2 acceptance test
+    test_investigation.py        the M3 acceptance tests
+  harness/       the agent loop on its own, with toy tools
 ```
 
 ## Reading guide

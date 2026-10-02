@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 from parley.core.domain import (
     CaseState,
     CloseReason,
+    FindingResult,
     InvoiceStatus,
     PromiseStatus,
     ReplyIntent,
@@ -68,6 +69,8 @@ class Transition:
     new_dispute: str | None = None
     # Extra reminders a person allowed beyond the policy limit (when resuming).
     grant_extra_reminders: int = 0
+    # Set when the investigator should look into a paid claim or a dispute.
+    investigate: ReplyIntent | None = None
 
 
 # --- Whether the customer may be contacted right now -------------------------
@@ -161,22 +164,18 @@ def on_reply(
         case ReplyIntent.PROMISE:
             return _on_promise(current, reply, policy, now, tz)
         case ReplyIntent.DISPUTE:
-            # Outreach to this customer stops until a person reviews the dispute.
+            # Outreach to this customer stops; the investigator gathers the
+            # evidence, then a person reviews the dispute.
             return Transition(
                 CaseState.INVESTIGATING,
                 next_action_at=None,
-                task=TaskKind.REVIEW_DISPUTE,
-                task_summary="Customer disputes this invoice.",
+                investigate=ReplyIntent.DISPUTE,
                 new_dispute=reply.summary or "No reason given.",
             )
         case ReplyIntent.PAID_CLAIM:
-            # Until the investigator arrives (M3), a person checks the books and the bank.
+            # The investigator checks the records, then a person confirms.
             return Transition(
-                CaseState.INVESTIGATING,
-                next_action_at=None,
-                task=TaskKind.VERIFY_PAYMENT,
-                task_summary="Customer says this invoice is already paid. Check the bank: "
-                "the payment may not be recorded in the books yet.",
+                CaseState.INVESTIGATING, next_action_at=None, investigate=ReplyIntent.PAID_CLAIM
             )
         case ReplyIntent.OUT_OF_OFFICE:
             return Transition(
@@ -253,6 +252,32 @@ def on_delivery_failed(current: CaseView, reason: str) -> Transition | None:
     if current.state == CaseState.CLOSED:
         return None
     return _needs_human(TaskKind.ESCALATION, reason)
+
+
+# What a person is told for each finding of the investigator.
+FINDING_NOTES = {
+    FindingResult.PAYMENT_FOUND: "A matching payment is in the books. Confirm it, then close.",
+    FindingResult.PARTIAL_PAYMENT: "Only part of the amount is in the books. Decide what is owed.",
+    FindingResult.PAYMENT_NOT_FOUND: (
+        "No matching payment is recorded in the books yet. Check the bank before replying: "
+        "the money may have arrived but not been entered."
+    ),
+    FindingResult.DISPUTE_NEEDS_HUMAN: "The customer disputes the invoice. Review the evidence.",
+    FindingResult.UNCLEAR: "The investigator could not reach a finding. Please look into it.",
+}
+
+
+def on_investigation_done(
+    current: CaseView, claim: ReplyIntent, result: FindingResult, summary: str
+) -> Transition | None:
+    """The investigator finished (or gave up). Code, not the model, decides what
+    happens: always a person, with the finding and its evidence. Returns None if
+    the case has moved on (for example the invoice was paid meanwhile)."""
+    if current.state != CaseState.INVESTIGATING:
+        return None
+    kind = TaskKind.REVIEW_DISPUTE if claim == ReplyIntent.DISPUTE else TaskKind.VERIFY_PAYMENT
+    text = f"{FINDING_NOTES[result]} Investigator ({result}): {summary}".strip()
+    return _needs_human(kind, text)
 
 
 def on_task_resolved(

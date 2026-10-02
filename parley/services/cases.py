@@ -7,10 +7,27 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from parley.core.domain import CaseState, DisputeStatus, InvoiceStatus, PromiseStatus, TaskStatus
+from parley.core.domain import (
+    AgentRunStatus,
+    CaseState,
+    DisputeStatus,
+    InvoiceStatus,
+    PromiseStatus,
+    TaskStatus,
+)
 from parley.core.messages import InvoiceLine
 from parley.core.workflow import Transition, first_reminder_at
-from parley.db.models import Case, Customer, Dispute, Invoice, MessageCase, Promise, Task, Tenant
+from parley.db.models import (
+    AgentRun,
+    Case,
+    Customer,
+    Dispute,
+    Invoice,
+    MessageCase,
+    Promise,
+    Task,
+    Tenant,
+)
 
 
 class NotFoundError(LookupError):
@@ -23,10 +40,12 @@ def apply_transition(
     transition: Transition,
     now: datetime,
     source_message_id: uuid.UUID | None = None,
+    agent_run_id: uuid.UUID | None = None,
 ) -> None:
     """Save a workflow decision onto a case. Sending a reminder is left to the caller,
     because one message can cover several cases. `source_message_id` is the reply
-    that caused the change, recorded on any promise it creates."""
+    that caused the change, recorded on any promise it creates; `agent_run_id` is
+    the investigation behind any task it creates."""
     reopening = case.state == CaseState.CLOSED and transition.state != CaseState.CLOSED
 
     case.state = transition.state
@@ -49,6 +68,7 @@ def apply_transition(
                 kind=transition.task,
                 summary=transition.task_summary,
                 status=TaskStatus.OPEN,
+                agent_run_id=agent_run_id,
                 created_at=now,
             )
         )
@@ -67,6 +87,19 @@ def apply_transition(
                 case_id=case.id,
                 reason=transition.new_dispute,
                 status=DisputeStatus.OPEN,
+                created_at=now,
+            )
+        )
+
+    if transition.investigate is not None:
+        session.add(
+            AgentRun(
+                tenant_id=case.tenant_id,
+                case_id=case.id,
+                message_id=source_message_id,
+                claim=transition.investigate,
+                status=AgentRunStatus.QUEUED,
+                steps=[],
                 created_at=now,
             )
         )

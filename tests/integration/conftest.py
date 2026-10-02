@@ -103,13 +103,18 @@ def write_aging(path: Path, rows: list[dict[str, str]]) -> Path:
     return path
 
 
-def make_tenant(rt: Runtime, invoices_path: Path, **policy: Any) -> uuid.UUID:
+def make_tenant(
+    rt: Runtime, invoices_path: Path, payments_path: Path | None = None, **policy: Any
+) -> uuid.UUID:
+    adapter_config = {"kind": "csv", "invoices_path": str(invoices_path)}
+    if payments_path is not None:
+        adapter_config["payments_path"] = str(payments_path)
     with rt.session_factory.begin() as session:
         tenant, _ = create_tenant(
             session,
             name="Acme Traders",
             timezone="Asia/Kolkata",
-            adapter_config={"kind": "csv", "invoices_path": str(invoices_path)},
+            adapter_config=adapter_config,
             policy_overrides=policy,
         )
         return tenant.id

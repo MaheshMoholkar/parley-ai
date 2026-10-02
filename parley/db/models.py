@@ -37,13 +37,16 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from parley.core.domain import (
+    AgentRunStatus,
     CaseState,
     CloseReason,
     Direction,
     DisputeStatus,
+    FindingResult,
     InvoiceStatus,
     MessageStatus,
     PromiseStatus,
+    ReplyIntent,
     TaskKind,
     TaskStatus,
 )
@@ -291,6 +294,37 @@ class Dispute(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class AgentRun(Base):
+    """One investigation: the claim, every step of the agent loop, and the finding.
+
+    Queued when a reply is read as a paid claim or a dispute; filled in by the
+    investigation step. The stored steps let a run be replayed and scored."""
+
+    __tablename__ = "agent_runs"
+    __table_args__ = (Index("ix_agent_runs_queue", "tenant_id", "status", "created_at"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_fk()
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id"), index=True)
+    # The customer's reply that made the claim.
+    message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id"))
+    claim: Mapped[ReplyIntent] = mapped_column(_enum(ReplyIntent))
+    status: Mapped[AgentRunStatus] = mapped_column(_enum(AgentRunStatus))
+    # How the loop ended: final, step_limit, time_limit, model_error, no_model.
+    outcome: Mapped[str | None] = mapped_column(String(32))
+    result: Mapped[FindingResult | None] = mapped_column(_enum(FindingResult))
+    finding: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    model: Mapped[str | None] = mapped_column(String(100))
+    prompt_version: Mapped[str | None] = mapped_column(String(64))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_micro_usd: Mapped[int] = mapped_column(BigInteger, default=0)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Task(Base):
     """Work for a human: an escalation, a reply to review, a draft to approve, ..."""
 
@@ -301,6 +335,8 @@ class Task(Base):
     case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cases.id"), index=True)
     # For approve_send tasks: the message waiting for approval.
     message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id"))
+    # For tasks created from an investigation: the run with the evidence.
+    agent_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("agent_runs.id"))
     kind: Mapped[TaskKind] = mapped_column(_enum(TaskKind))
     summary: Mapped[str] = mapped_column(Text)
     status: Mapped[TaskStatus] = mapped_column(_enum(TaskStatus), default=TaskStatus.OPEN)

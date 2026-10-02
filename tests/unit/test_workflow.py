@@ -8,6 +8,7 @@ import pytest
 from parley.core.domain import (
     CaseState,
     CloseReason,
+    FindingResult,
     InvoiceStatus,
     PromiseStatus,
     ReplyIntent,
@@ -25,6 +26,7 @@ from parley.core.workflow import (
     WorkflowError,
     first_reminder_at,
     on_delivery_failed,
+    on_investigation_done,
     on_reply,
     on_source_update,
     on_task_resolved,
@@ -134,19 +136,40 @@ def test_invalid_promise_goes_to_a_human(reply: Reply) -> None:
     assert t.new_promise is None
 
 
-def test_dispute_stops_outreach_and_records_the_dispute() -> None:
+def test_dispute_starts_an_investigation_and_records_the_dispute() -> None:
     reply = Reply(ReplyIntent.DISPUTE, summary="Says half the goods arrived damaged.")
     t = on_reply(case(CaseState.AWAITING_REPLY), reply, POLICY, NOW, IST)
-    assert (t.state, t.next_action_at) == (CaseState.INVESTIGATING, None)
-    assert t.task == TaskKind.REVIEW_DISPUTE
+    assert (t.state, t.next_action_at, t.task) == (CaseState.INVESTIGATING, None, None)
+    assert t.investigate == ReplyIntent.DISPUTE
     assert t.new_dispute == "Says half the goods arrived damaged."
 
 
-def test_paid_claim_asks_a_person_to_check_the_bank() -> None:
+def test_paid_claim_starts_an_investigation() -> None:
     t = on_reply(case(CaseState.AWAITING_REPLY), Reply(ReplyIntent.PAID_CLAIM), POLICY, NOW, IST)
-    assert (t.state, t.next_action_at) == (CaseState.INVESTIGATING, None)
-    assert t.task == TaskKind.VERIFY_PAYMENT
-    assert "not be recorded in the books yet" in t.task_summary
+    assert (t.state, t.next_action_at, t.task) == (CaseState.INVESTIGATING, None, None)
+    assert t.investigate == ReplyIntent.PAID_CLAIM
+
+
+@pytest.mark.parametrize(
+    ("claim", "kind"),
+    [
+        (ReplyIntent.PAID_CLAIM, TaskKind.VERIFY_PAYMENT),
+        (ReplyIntent.DISPUTE, TaskKind.REVIEW_DISPUTE),
+    ],
+)
+def test_finished_investigation_goes_to_a_person(claim: ReplyIntent, kind: TaskKind) -> None:
+    t = on_investigation_done(
+        case(CaseState.INVESTIGATING), claim, FindingResult.PAYMENT_NOT_FOUND, "Searched Dec-Jan."
+    )
+    assert t is not None
+    assert (t.state, t.task) == (CaseState.NEEDS_HUMAN, kind)
+    assert "Check the bank" in t.task_summary
+    assert t.task_summary.endswith("Investigator (payment_not_found): Searched Dec-Jan.")
+
+
+def test_finished_investigation_on_a_case_that_moved_on_changes_nothing() -> None:
+    closed = case(CaseState.CLOSED, close_reason=CloseReason.PAID)
+    assert on_investigation_done(closed, ReplyIntent.PAID_CLAIM, FindingResult.UNCLEAR, "") is None
 
 
 def test_out_of_office_tries_again_after_the_gap() -> None:

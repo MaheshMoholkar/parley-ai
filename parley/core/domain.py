@@ -58,6 +58,22 @@ class ReplyIntent(StrEnum):
     OTHER = "other"
 
 
+class FindingResult(StrEnum):
+    """The investigator's conclusion about a paid claim or a dispute."""
+
+    PAYMENT_FOUND = "payment_found"
+    PARTIAL_PAYMENT = "partial_payment"
+    PAYMENT_NOT_FOUND = "payment_not_found"  # not recorded in the books yet
+    DISPUTE_NEEDS_HUMAN = "dispute_needs_human"
+    UNCLEAR = "unclear"
+
+
+class AgentRunStatus(StrEnum):
+    QUEUED = "queued"
+    DONE = "done"
+    CANCELLED = "cancelled"  # the case moved on before the run started
+
+
 class TaskAction(StrEnum):
     """What a person can do with a task."""
 

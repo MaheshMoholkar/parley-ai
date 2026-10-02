@@ -6,6 +6,7 @@ from parley.adapters.channels.dry_run import DryRunChannel
 from parley.adapters.channels.email_ses import SesEmailChannel
 from parley.adapters.clock import SystemClock
 from parley.adapters.models.bedrock import BedrockModel
+from parley.adapters.models.bedrock_agent import BedrockAgentModel
 from parley.config import Settings, get_settings
 from parley.db.session import make_engine, make_session_factory
 from parley.ports.channel import ChannelPort
@@ -16,7 +17,11 @@ def build_runtime(settings: Settings | None = None) -> Runtime:
     settings = settings or get_settings()
     engine = make_engine(settings.database_url)
     model = None
+    agent_model = None
     if settings.model_provider == "bedrock":
+        agent_model = BedrockAgentModel(
+            settings.aws_region, settings.model_large, settings.effort_large
+        )
         model = BedrockModel(
             region=settings.aws_region,
             model_ids={"large": settings.model_large, "small": settings.model_small},
@@ -30,6 +35,7 @@ def build_runtime(settings: Settings | None = None) -> Runtime:
         clock=SystemClock(),
         channel=channel,
         model=model,
+        agent_model=agent_model,
         inbound_secret=settings.inbound_secret,
         model_prices=settings.model_prices,
     )

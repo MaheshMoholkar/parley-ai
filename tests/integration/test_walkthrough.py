@@ -7,8 +7,10 @@ every step.
   Tue 6 Jan   customer replies "will pay on Friday" -> Promised (9 Jan)
   Sun 11 Jan  promise + 1 day grace has passed, still unpaid -> promise broken;
               Sunday is quiet, so reminder 2 (firm) goes out Mon 12 Jan
-  Tue 13 Jan  customer replies with a dispute -> Investigating, review task,
-              and no further reminders
+  Tue 13 Jan  customer replies with a dispute -> Investigating; the
+              investigator reads the contact history and cites the reply;
+              a person gets a review task with that evidence, and no
+              further reminders go out
 """
 
 import hashlib
@@ -20,6 +22,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from harness import FinalAnswer, ToolCall
+from harness.testing import ScriptedModel
 from parley.adapters.clock import FakeClock
 from parley.adapters.models.fake import FakeCall, FakeModel
 from parley.api.app import create_app
@@ -69,6 +73,19 @@ def test_reminder_promise_broken_promise_dispute(
     rt: Runtime, clock: FakeClock, tmp_path: Path
 ) -> None:
     rt.model = FakeModel(respond)
+    rt.agent_model = ScriptedModel(
+        [
+            ToolCall("t1", "get_contact_history", {}),
+            lambda received: FinalAnswer(
+                "t2",
+                {
+                    "result": "dispute_needs_human",
+                    "evidence_ids": [json.loads(received[-1].content)[-1]["id"]],  # type: ignore[union-attr]
+                    "summary": "Customer says half the boxes arrived damaged.",
+                },
+            ),
+        ]
+    )
     rt.inbound_secret = SECRET
     client = TestClient(create_app(rt))
     aging = write_aging(tmp_path / "aging.csv", [invoice_row("A-1", "Asha", "1000", "2026-01-01")])
@@ -138,7 +155,10 @@ def test_reminder_promise_broken_promise_dispute(
     reply("Half the boxes arrived damaged. We dispute this invoice.")
     for n in range(8, 20):
         day(n)
-    assert state() == CaseState.INVESTIGATING
+    assert state() == CaseState.NEEDS_HUMAN
     assert len(outbound()) == 2
     with rt.session_factory() as session:
-        assert [t.kind for t in session.scalars(select(Task))] == [TaskKind.REVIEW_DISPUTE]
+        [task] = session.scalars(select(Task)).all()
+        assert task.kind == TaskKind.REVIEW_DISPUTE
+        assert task.agent_run_id is not None
+        assert "Evidence: inbound message of 13 Jan 2026" in task.summary
