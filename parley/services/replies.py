@@ -18,7 +18,14 @@ from functools import partial
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from parley.collections_ai.jobs import READ_PROMPT, ReplyReading, read_reply
+from parley.collections_ai.jobs import (
+    BRIEF_PROMPT,
+    READ_PROMPT,
+    ReplyReading,
+    read_reply,
+    update_brief,
+)
+from parley.core.checks import check_brief
 from parley.core.domain import CaseState, Direction, MessageStatus, ReplyIntent
 from parley.core.money import MoneyError, to_minor_units
 from parley.core.workflow import Reply, on_reply
@@ -76,6 +83,9 @@ def _handle_reply(rt: Runtime, session: Session, message: Message) -> None:
     for case, case_reply in _replies_per_case(reply, cases):
         transition = on_reply(case.view(), case_reply, tenant.policy, now, tenant.zone)
         apply_transition(session, case, transition, now, source_message_id=message.id)
+
+    if rt.model is not None:
+        _update_brief(rt, rt.model, session, message, customer, reply)
 
     message.status = MessageStatus.READ
     message.prompt_version = READ_PROMPT if rt.model is not None else None
@@ -158,6 +168,42 @@ def _read(
         if reading.confidence >= MIN_CONFIDENCE:
             return reading
     return reading
+
+
+def _update_brief(
+    rt: Runtime,
+    model: ModelPort,
+    session: Session,
+    message: Message,
+    customer: Customer,
+    reply: _Understood,
+) -> None:
+    """Refresh the customer brief. A failed or invalid update keeps the old brief:
+    the brief is a convenience, never a reason to stop handling the reply."""
+    try:
+        new_brief = run_job(
+            rt,
+            session,
+            message.tenant_id,
+            message.id,
+            BRIEF_PROMPT,
+            "small",
+            partial(
+                update_brief,
+                model,
+                customer.brief,
+                message.body,
+                f"{reply.intent}: {reply.summary}",
+            ),
+        ).output.brief.strip()
+    except ModelError as exc:
+        log.warning("brief update for customer %s failed: %s", customer.id, exc)
+        return
+    problems = check_brief(new_brief)
+    if problems:
+        log.warning("brief update for customer %s rejected: %s", customer.id, problems)
+        return
+    customer.brief = new_brief
 
 
 def _replies_per_case(reply: _Understood, cases: list[Case]) -> list[tuple[Case, Reply]]:

@@ -21,6 +21,7 @@ from parley.ports.model import Completion, ModelPort
 DRAFT_PROMPT = "draft_reminder.v1"
 TONE_PROMPT = "tone_judge.v1"
 READ_PROMPT = "read_reply.v1"
+BRIEF_PROMPT = "update_brief.v1"
 
 Language = Literal["en", "hi", "mr", "hinglish"]
 
@@ -117,3 +118,21 @@ def read_reply(
         f"<reply>\n{reply_text}\n</reply>"
     )
     return model.complete(tier, prompt.text, user, ReplyReading), prompt
+
+
+# --- Updating the customer brief ---------------------------------------------------------
+
+
+class BriefOut(BaseModel):
+    brief: str = Field(description="The updated brief, at most 150 words")
+
+
+def update_brief(
+    model: ModelPort, current_brief: str, reply_text: str, read_as: str
+) -> tuple[Completion[BriefOut], Prompt]:
+    prompt = load_prompt(BRIEF_PROMPT)
+    user = (
+        f"<current_brief>\n{current_brief or '(empty)'}\n</current_brief>\n\n"
+        f"Latest contact, read as: {read_as}\n<reply>\n{reply_text}\n</reply>"
+    )
+    return model.complete("small", prompt.text, user, BriefOut), prompt

@@ -4,9 +4,11 @@ import hashlib
 import hmac
 import uuid
 from dataclasses import asdict
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
@@ -38,6 +40,16 @@ router = APIRouter()
 
 Limit = Annotated[int, Query(ge=1, le=200)]
 Offset = Annotated[int, Query(ge=0)]
+
+
+REVIEW_PAGE = (Path(__file__).parent / "review.html").read_text(encoding="utf-8")
+
+
+@router.get("/review", response_class=HTMLResponse, include_in_schema=False)
+def review_page() -> str:
+    """The minimal review screen. The page itself is public; everything it shows
+    comes from the API, which needs the tenant's API key."""
+    return REVIEW_PAGE
 
 
 @router.get("/healthz")

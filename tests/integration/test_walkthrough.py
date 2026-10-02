@@ -23,7 +23,7 @@ from sqlalchemy import select
 from parley.adapters.clock import FakeClock
 from parley.adapters.models.fake import FakeCall, FakeModel
 from parley.api.app import create_app
-from parley.collections_ai.jobs import DraftOut, ReplyReading, ToneVerdict
+from parley.collections_ai.jobs import BriefOut, DraftOut, ReplyReading, ToneVerdict
 from parley.core.domain import (
     CaseState,
     Direction,
@@ -40,7 +40,9 @@ from tests.integration.conftest import IST, START, invoice_row, make_tenant, wri
 SECRET = "walkthrough-secret"
 
 
-def respond(call: FakeCall) -> DraftOut | ToneVerdict | ReplyReading:
+def respond(call: FakeCall) -> DraftOut | ToneVerdict | ReplyReading | BriefOut:
+    if call.output_type is BriefOut:
+        return BriefOut(brief="Replies within a day.")
     if call.output_type is DraftOut:
         facts = json.loads(call.prompt)
         invoice = facts["invoices"][0]

@@ -57,6 +57,7 @@ class MessageOut(_FromORM):
     id: uuid.UUID
     channel: str
     direction: Direction
+    from_address: str | None
     to_address: str
     subject: str
     body: str

@@ -91,6 +91,8 @@ The core keeps its own copy of customers, invoices and payments in one fixed sha
 | `dispute` | case\_id, reason, evidence ids, status | Core |
 | `task` | case\_id, kind (escalation, review\_reply, approve\_send, verify\_payment, review\_dispute), summary, status, resolution | Core |
 | `agent_run` | case\_id, steps, tokens, cost, outcome | Core |
+| `model_call` | job prompt version, tier, model, tokens, estimated cost, latency, ok or error | Core |
+| `unmatched_inbound` | sender, recipients, subject, body, reason (mail that matched no case) | Core |
 
 **Rules**
 

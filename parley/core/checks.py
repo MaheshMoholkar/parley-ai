@@ -122,3 +122,17 @@ def _parse_date(text: str, formats: tuple[str, ...]) -> date | None:
         except ValueError:
             continue
     return None
+
+
+MAX_BRIEF_WORDS = 150
+
+
+def check_brief(text: str) -> list[str]:
+    """A customer brief must stay short and must not carry amounts, which always
+    come from the books."""
+    problems = []
+    if len(text.split()) > MAX_BRIEF_WORDS:
+        problems.append(f"brief is longer than {MAX_BRIEF_WORDS} words")
+    if _MONEY.search(text):
+        problems.append("brief contains an amount")
+    return problems

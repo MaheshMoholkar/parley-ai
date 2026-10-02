@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 
 from parley.adapters.models.fake import FakeCall, FakeModel
 from parley.api.app import create_app
-from parley.collections_ai.jobs import ReplyReading
+from parley.collections_ai.jobs import BriefOut, ReplyReading
 from parley.core.domain import (
     CaseState,
     Direction,
@@ -54,8 +54,12 @@ def reading(intent: ReplyIntent, confidence: float = 0.95, **fields: object) -> 
     return ReplyReading(intent=intent, confidence=confidence, summary=f"says {intent}", **fields)  # type: ignore[arg-type]
 
 
-def model_reading(small: ReplyReading, large: ReplyReading | None = None) -> FakeModel:
-    def respond(call: FakeCall) -> ReplyReading:
+def model_reading(
+    small: ReplyReading, large: ReplyReading | None = None, brief: str = "Replies quickly."
+) -> FakeModel:
+    def respond(call: FakeCall) -> ReplyReading | BriefOut:
+        if call.output_type is BriefOut:
+            return BriefOut(brief=brief)
         return small if call.tier == "small" else (large or small)
 
     return FakeModel(respond)
@@ -188,6 +192,26 @@ def test_promise_is_recorded(client: TestClient, rt: Runtime, tmp_path: Path) ->
         assert session.scalars(select(Customer.language)).one() == "hinglish"
 
 
+def test_reply_updates_the_customer_brief(client: TestClient, rt: Runtime, tmp_path: Path) -> None:
+    remind(rt, tmp_path, [A1])
+    rt.model = model_reading(reading(ReplyIntent.QUESTION), brief="Asks for invoice copies.")
+
+    receive(client, rt, "Can you send a copy of the invoice?")
+
+    with rt.session_factory() as session:
+        assert session.scalars(select(Customer.brief)).one() == "Asks for invoice copies."
+
+
+def test_brief_with_an_amount_is_rejected(client: TestClient, rt: Runtime, tmp_path: Path) -> None:
+    remind(rt, tmp_path, [A1])
+    rt.model = model_reading(reading(ReplyIntent.QUESTION), brief="Owes INR 1,000.00.")
+
+    receive(client, rt, "What do I owe?")
+
+    with rt.session_factory() as session:
+        assert session.scalars(select(Customer.brief)).one() == ""
+
+
 def test_unsure_reading_is_redone_by_the_large_model(
     client: TestClient, rt: Runtime, tmp_path: Path
 ) -> None:
@@ -199,7 +223,8 @@ def test_unsure_reading_is_redone_by_the_large_model(
 
     receive(client, rt, "Will clear it by Thursday, inshallah")
 
-    assert [c.tier for c in model.calls] == ["small", "large"]
+    readings = [c.tier for c in model.calls if c.output_type is ReplyReading]
+    assert readings == ["small", "large"]
     assert case(rt, "A-1").state == CaseState.PROMISED
 
 

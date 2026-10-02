@@ -3,10 +3,15 @@
 A collections agent: it chases overdue invoices for a business and hands a human
 only the cases that need judgement. The full design is in [docs/spec.md](docs/spec.md).
 
-**Status: milestone M1.** M1 includes the core tables, the CSV accounting adapter, sync, the case
-state machine, a simulated clock, and a dry-run channel that records reminders
-instead of sending them. There are no model calls yet. Email (SES) and the model
-drafter come in M2.
+**Status: milestones M1 and M2.** The service syncs invoices from a CSV aging
+report, runs each overdue invoice through the case state machine, drafts
+reminders with Claude (on Amazon Bedrock) and checks every draft in code, sends
+email through Amazon SES, reads customer replies, and records promises and
+disputes. A person approves drafts and takes over unclear cases on a small review
+screen. Next: the investigator (M3) and the eval suite (M4).
+
+By default it runs with no model and no email provider: reminders use a fixed
+template and are recorded instead of sent. See "Turning on the model and email".
 
 ## Quick start
 
@@ -33,7 +38,37 @@ uv run uvicorn parley.api.app:create_app --factory --reload
 curl -H "Authorization: Bearer <API key>" "localhost:8000/v1/cases?state=awaiting_reply"
 ```
 
-Interactive API docs are at `http://localhost:8000/docs` while the API runs.
+Interactive API docs are at `http://localhost:8000/docs`, and the review screen
+is at `http://localhost:8000/review`, while the API runs. New tenants start with
+`approval_mode: all`, so every reminder waits on the review screen until a person
+approves it.
+
+## Turning on the model and email
+
+Set these environment variables (or put them in `.env`; see `.env.example`):
+
+| Variable | Meaning |
+| --- | --- |
+| `PARLEY_MODEL_PROVIDER=bedrock` | Draft with Claude and read replies. AWS credentials come from the standard AWS chain. |
+| `PARLEY_AWS_REGION` | Region for Bedrock and SES, e.g. `ap-south-1`. |
+| `PARLEY_MODEL_LARGE`, `PARLEY_MODEL_SMALL` | Bedrock model ids for the two tiers. Defaults: `anthropic.claude-opus-5-5` and `anthropic.claude-sonnet-5-5`. |
+| `PARLEY_CHANNEL=ses` | Send email through SES. |
+| `PARLEY_EMAIL_FROM` | Verified SES sender address. |
+| `PARLEY_REPLY_DOMAIN` | Domain that receives replies (`reply+<token>@<domain>`) through SES receiving. |
+| `PARLEY_INBOUND_SECRET` | Shared secret for `POST /v1/inbound/email`. Inbound mail is refused while it is empty. |
+
+**Receiving replies.** Configure an SES receipt rule for the reply domain that
+stores each email in S3, and a small forwarder (for example a Lambda) that posts
+the raw email to `POST /v1/inbound/email` with the header
+`X-Parley-Signature: sha256=<HMAC-SHA256 of the body with the inbound secret>`.
+
+**What the model may do.** It drafts text and reads replies, nothing else. Every
+draft is checked in code for amounts, due dates, invoice numbers and banned
+phrases, and judged for tone; a draft that fails twice is replaced by the fixed
+template and sent for approval. A reply can only propose a promise, dispute or
+payment claim, and code validates each field before the state machine acts.
+Every model call is logged with its prompt version, tokens, estimated cost and
+latency in the `model_calls` table.
 
 To run everything in containers, use `docker compose up --build`. Put CSV files in
 `./data`, and pass `/data/<file>.csv` as the path when you create the tenant.
@@ -62,29 +97,38 @@ parley/
   core/          pure rules: no database, no network. Start reading here.
     domain.py      names: case states, task kinds, statuses
     workflow.py    the case state machine (one function per event)
-    policy.py      tenant settings, quiet hours, weekly contact cap
+    policy.py      tenant settings, quiet hours, weekly contact cap, approval
+    checks.py      the checks every draft must pass before it is sent
     money.py       amounts as whole paise
-    messages.py    the fixed reminder template (until M2)
+    messages.py    the fixed reminder template (fallback when drafts fail)
+  collections_ai/ the model jobs and their versioned prompts (prompts/*.md)
   ports/         interfaces the core needs from the outside world
     accounting.py  read invoices, customers and payments from a source system
-    channel.py     send a message
+    channel.py     send a message; the shape of an inbound reply
     clock.py       tell the time (faked in tests)
+    model.py       call a model and get typed output back
   adapters/      implementations of the ports
     accounting/csv/  reads an aging report CSV
-    channels/dry_run.py  records messages instead of sending
+    channels/      dry run, SES sending, inbound email parsing
+    models/        Claude on Bedrock, and a fake model for tests
     clock.py       real clock and fake clock
   db/            tables (models.py), connections, migrations
   services/      use cases that load data, call the core and save results
     sync.py        copy invoices from the source; close or reopen cases
     due_cases.py   act on due cases: remind, escalate, reschedule
+    drafting.py    draft queued reminders, run checks, apply the approval gate
+    inbound.py     receive and match a customer's email reply
+    replies.py     read replies and act on them; update the customer brief
+    tasks.py       a person approving, editing, rejecting, resuming, closing
     delivery.py    send pending messages from the outbox
     worker.py      the background loop that runs all of the above
-  api/           HTTP endpoints (FastAPI)
+  api/           HTTP endpoints (FastAPI) and the review screen (review.html)
   cli.py         the `parley` command
 tests/
   unit/          core rules and the CSV adapter (no database)
   integration/   services and API against a real Postgres
     test_simulation_30_days.py   the M1 acceptance test
+    test_walkthrough.py          the M2 acceptance test
 ```
 
 ## Reading guide

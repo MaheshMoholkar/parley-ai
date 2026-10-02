@@ -100,3 +100,9 @@ def test_sync_with_a_bad_file_reports_the_problem(
 
     assert response.status_code == 422
     assert "missing columns" in response.json()["detail"]
+
+
+def test_review_page_is_served(client: TestClient) -> None:
+    response = client.get("/review")
+    assert response.status_code == 200
+    assert "Tasks waiting for a person" in response.text

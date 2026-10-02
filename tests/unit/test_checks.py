@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from parley.core.checks import check_draft
+from parley.core.checks import check_brief, check_draft
 from parley.core.messages import InvoiceLine, reminder_message
 
 LINE_1 = InvoiceLine("INV-1", 123450, "INR", date(2026, 1, 1))
@@ -77,3 +77,9 @@ def test_words_that_merely_contain_a_banned_word_pass() -> None:
 
 def test_empty_draft_is_blocked() -> None:
     assert "subject or body is empty" in check_draft("", "", [LINE_1])
+
+
+def test_brief_limits() -> None:
+    assert check_brief("Pays late but always pays. Prefers Hindi.") == []
+    assert check_brief("word " * 151) == ["brief is longer than 150 words"]
+    assert check_brief("Usually pays Rs. 5000 at a time.") == ["brief contains an amount"]
