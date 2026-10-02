@@ -1,20 +1,25 @@
 """HTTP endpoints (spec: "API and events"). M1 covers sync, cases, pause and tasks."""
 
+import hashlib
+import hmac
 import uuid
 from dataclasses import asdict
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, selectinload
+from starlette.concurrency import run_in_threadpool
 
 from parley.adapters.accounting.csv import CsvFormatError
+from parley.adapters.channels.email_inbound import parse_email
 from parley.api.dependencies import RuntimeDep, SessionDep, TenantDep
 from parley.api.schemas import (
     CaseDetailOut,
     CaseOut,
     CasePage,
     CustomerOut,
+    InboundOut,
     MessageOut,
     ResolveTaskIn,
     SyncOut,
@@ -25,6 +30,7 @@ from parley.core.domain import CaseState, TaskStatus
 from parley.db.models import Case, Message, MessageCase, Task
 from parley.services.accounting import AdapterConfigError
 from parley.services.cases import NotFoundError, set_case_paused, set_customer_paused
+from parley.services.inbound import receive_email
 from parley.services.sync import SyncError, sync_tenant
 from parley.services.tasks import TaskError, resolve_task
 
@@ -165,6 +171,43 @@ def resolve(
     except TaskError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.problems) from None
     return TaskOut.model_validate(task)
+
+
+MAX_EMAIL_BYTES = 10 * 1024 * 1024
+
+
+@router.post("/v1/inbound/email", status_code=status.HTTP_202_ACCEPTED)
+async def inbound_email(
+    request: Request,
+    rt: RuntimeDep,
+    signature: Annotated[str | None, Header(alias="X-Parley-Signature")] = None,
+) -> InboundOut:
+    """Receive one raw email (MIME) forwarded from SES receiving.
+
+    Not authenticated by API key: the forwarder signs the raw body with the
+    shared inbound secret, sent as `X-Parley-Signature: sha256=<hex HMAC>`.
+    """
+    if not rt.inbound_secret:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "inbound email is not configured")
+    raw = await request.body()
+    if len(raw) > MAX_EMAIL_BYTES:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "email too large")
+    if not valid_signature(raw, signature, rt.inbound_secret):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "bad or missing signature")
+
+    email = parse_email(raw)
+    # receive_email talks to the database synchronously, so run it off the event loop.
+    result = await run_in_threadpool(receive_email, rt, email)
+    return InboundOut(outcome=result.outcome, message_id=result.message_id, reason=result.reason)
+
+
+def valid_signature(body: bytes, header: str | None, secret: str) -> bool:
+    if not header or not header.startswith("sha256="):
+        return False
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    # compare_digest takes the same time whatever the input, so the signature
+    # cannot be guessed byte by byte from response times.
+    return hmac.compare_digest(expected, header.removeprefix("sha256="))
 
 
 def _set_case_paused(

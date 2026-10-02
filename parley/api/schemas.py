@@ -3,6 +3,7 @@ straight from database objects."""
 
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -100,6 +101,12 @@ class TaskPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class InboundOut(BaseModel):
+    outcome: Literal["stored", "duplicate", "unmatched"]
+    message_id: uuid.UUID | None = None
+    reason: str = ""
 
 
 class SyncOut(BaseModel):

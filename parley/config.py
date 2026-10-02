@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     worker_poll_seconds: int = 30
     log_level: str = "INFO"
 
+    # --- Email ---
+    # "dry_run" records messages instead of sending; "ses" sends with Amazon SES.
+    channel: Literal["dry_run", "ses"] = "dry_run"
+    email_from: str = "reminders@example.com"
+    # Replies go to reply+<token>@<reply_domain>, received by SES.
+    reply_domain: str = "replies.example.com"
+    # Shared secret that signs POST /v1/inbound/email. Inbound mail is refused
+    # while this is empty.
+    inbound_secret: str = ""
+
     # --- Model (Claude on Amazon Bedrock) ---
     # "template" uses the fixed reminder template and no model (M1 behaviour);
     # "bedrock" drafts with the model and reads replies.

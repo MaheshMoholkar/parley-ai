@@ -185,7 +185,8 @@ def on_reply(
             )
         case ReplyIntent.QUESTION | ReplyIntent.WRONG_CONTACT | ReplyIntent.OTHER:
             return _needs_human(
-                TaskKind.REVIEW_REPLY, f"Customer reply needs a person: {reply.intent}."
+                TaskKind.REVIEW_REPLY,
+                f"Customer reply needs a person ({reply.intent}): {reply.summary}",
             )
 
     raise WorkflowError(f"unknown reply intent {reply.intent}")

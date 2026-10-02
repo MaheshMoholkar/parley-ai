@@ -17,9 +17,16 @@ class NotFoundError(LookupError):
     pass
 
 
-def apply_transition(session: Session, case: Case, transition: Transition, now: datetime) -> None:
+def apply_transition(
+    session: Session,
+    case: Case,
+    transition: Transition,
+    now: datetime,
+    source_message_id: uuid.UUID | None = None,
+) -> None:
     """Save a workflow decision onto a case. Sending a reminder is left to the caller,
-    because one message can cover several cases."""
+    because one message can cover several cases. `source_message_id` is the reply
+    that caused the change, recorded on any promise it creates."""
     reopening = case.state == CaseState.CLOSED and transition.state != CaseState.CLOSED
 
     case.state = transition.state
@@ -72,6 +79,7 @@ def apply_transition(session: Session, case: Case, transition: Transition, now: 
                 amount=transition.new_promise.amount,
                 promised_date=transition.new_promise.promised_date,
                 status=PromiseStatus.OPEN,
+                source_message_id=source_message_id,
             )
         )
 

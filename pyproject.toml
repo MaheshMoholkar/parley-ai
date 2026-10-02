@@ -22,6 +22,7 @@ parley = "parley.cli:main"
 
 [dependency-groups]
 dev = [
+    "boto3-stubs[sesv2]>=1.43.107",
     "httpx2>=2.13",
     "import-linter>=2.1",
     "mypy>=1.11",

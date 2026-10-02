@@ -68,6 +68,7 @@ def _deliver(rt: Runtime, session: Session, message: Message) -> bool:
                 to_address=message.to_address,
                 subject=message.subject,
                 body=message.body,
+                reply_token=message.reply_token,
             )
         )
     except Exception as exc:
