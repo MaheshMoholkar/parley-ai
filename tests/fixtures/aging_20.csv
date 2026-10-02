@@ -1,0 +1,21 @@
+invoice_number,customer_id,customer_name,email,phone,amount_due,currency,due_date,details
+A-1,C01,Asha Stores,asha@example.com,9800000001,12500.00,INR,2025-12-20,
+B-1,C02,Bala Traders,bala@example.com,9800000002,4200.00,INR,2026-01-01,
+B-2,C02,Bala Traders,bala@example.com,9800000002,1800.00,INR,2026-01-02,
+C-1,C03,Chitra Textiles,chitra@example.com,,9999.00,INR,2025-12-30,
+D-1,C04,Deepak Hardware,deepak@example.com,,3150.50,INR,2026-01-08,
+E-1,C05,Esha Pharma,esha@example.com,,22000.00,INR,2026-01-25,
+F-1,C06,Farid Motors,,9800000006,7600.00,INR,2026-01-01,
+G-1,C07,Gita Foods,gita@example.com,,1500.00,INR,2026-01-01,
+H-1,C08,Hari Electricals,hari@example.com,,5000.00,INR,2026-01-01,
+H-2,C08,Hari Electricals,hari@example.com,,2500.00,INR,2026-01-04,
+I-1,C09,Indira Prints,indira@example.com,,3300.00,INR,2026-01-01,
+J-1,C10,Jay Builders,jay@example.com,,1000.00,INR,2026-01-01,
+K-1,C11,Kiran Optics,kiran@example.com,,0,INR,2026-01-01,already paid
+L-1,C12,Lata Bakery,lata@example.com,,800.00,INR,2026-02-10,
+M-1,C13,Mohan Agencies,mohan@example.com,,1100.00,INR,2025-12-31,
+M-2,C13,Mohan Agencies,mohan@example.com,,2200.00,INR,2025-12-31,
+M-3,C13,Mohan Agencies,mohan@example.com,,3300.00,INR,2025-12-31,
+N-1,C14,Nisha Salon,nisha@example.com,,950.00,INR,2026-01-03,
+O-1,C15,Om Logistics,om@example.com,,18000.00,INR,2026-01-10,
+P-1,C16,Priya Studio,priya@example.com,,6400.00,INR,2025-12-25,Order 4471

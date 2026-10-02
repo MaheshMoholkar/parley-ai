@@ -72,7 +72,7 @@ parley-ai/
   docs/                 this spec and other design notes
 ```
 
-`parley/core/` imports only `parley/ports/`. `harness/` and `evalkit/` import nothing from `parley/`. CI enforces both with import-linter.
+`parley/core/` imports nothing else from the app, and `parley/ports/` imports only `parley/core/`. Adapters never touch the database, and only `parley/api/` uses FastAPI. `harness/` and `evalkit/` import nothing from `parley/`. CI enforces these rules with import-linter.
 
 ## Canonical data model
 
@@ -161,7 +161,7 @@ A source update that sets the invoice to paid (amount due zero), void or removed
 
 | From | Trigger | To | Action |
 | --- | --- | --- | --- |
-| (none) | Invoice passes due date plus the first-reminder delay | Scheduled | Open the case |
+| (none) | Invoice passes its due date | Scheduled | Open the case; the first reminder is due at the start of due date plus the first-reminder delay |
 | Scheduled | `next_action_at` reached and policy allows contact | Awaiting reply | Draft, check and send a reminder |
 | Awaiting reply | No reply within the reminder gap | Scheduled | Step up the tone |
 | Awaiting reply | Reply read as a promise | Promised | Record the promise, sleep until date plus grace |
