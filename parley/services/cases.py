@@ -11,6 +11,7 @@ from parley.core.domain import (
     AgentRunStatus,
     CaseState,
     DisputeStatus,
+    EventType,
     InvoiceStatus,
     PromiseStatus,
     TaskStatus,
@@ -28,6 +29,7 @@ from parley.db.models import (
     Task,
     Tenant,
 )
+from parley.services.webhooks import emit
 
 
 class NotFoundError(LookupError):
@@ -47,6 +49,8 @@ def apply_transition(
     that caused the change, recorded on any promise it creates; `agent_run_id` is
     the investigation behind any task it creates."""
     reopening = case.state == CaseState.CLOSED and transition.state != CaseState.CLOSED
+    closing = case.state != CaseState.CLOSED and transition.state == CaseState.CLOSED
+    about = {"case_id": case.id, "customer_id": case.customer_id}
 
     case.state = transition.state
     case.next_action_at = transition.next_action_at
@@ -56,13 +60,23 @@ def apply_transition(
         case.closed_at = now
         case.closed_reason = transition.close_reason
         _cancel_open_tasks(session, case, now)
+        if closing:
+            emit(
+                session,
+                case.tenant_id,
+                EventType.CASE_CLOSED,
+                {**about, "reason": case.closed_reason},
+                now,
+            )
     elif reopening:
         case.closed_at = None
         case.closed_reason = None
 
     if transition.task is not None:
+        task_id = uuid.uuid4()
         session.add(
             Task(
+                id=task_id,
                 tenant_id=case.tenant_id,
                 case_id=case.id,
                 kind=transition.task,
@@ -72,6 +86,8 @@ def apply_transition(
                 created_at=now,
             )
         )
+        task_data = {**about, "task_id": task_id, "kind": transition.task}
+        emit(session, case.tenant_id, EventType.TASK_CREATED, task_data, now)
 
     if transition.promise_outcome is not None:
         open_promises = session.scalars(
@@ -79,10 +95,15 @@ def apply_transition(
         )
         for promise in open_promises:
             promise.status = transition.promise_outcome
+            if promise.status == PromiseStatus.BROKEN:
+                broken = {**about, "promise_id": promise.id, "promised_date": promise.promised_date}
+                emit(session, case.tenant_id, EventType.PROMISE_BROKEN, broken, now)
 
     if transition.new_dispute is not None:
+        dispute_id = uuid.uuid4()
         session.add(
             Dispute(
+                id=dispute_id,
                 tenant_id=case.tenant_id,
                 case_id=case.id,
                 reason=transition.new_dispute,
@@ -90,6 +111,8 @@ def apply_transition(
                 created_at=now,
             )
         )
+        dispute = {**about, "dispute_id": dispute_id, "reason": transition.new_dispute}
+        emit(session, case.tenant_id, EventType.DISPUTE_OPENED, dispute, now)
 
     if transition.investigate is not None:
         session.add(
@@ -105,8 +128,10 @@ def apply_transition(
         )
 
     if transition.new_promise is not None:
+        promise_id = uuid.uuid4()
         session.add(
             Promise(
+                id=promise_id,
                 tenant_id=case.tenant_id,
                 case_id=case.id,
                 amount=transition.new_promise.amount,
@@ -115,6 +140,13 @@ def apply_transition(
                 source_message_id=source_message_id,
             )
         )
+        promised = {
+            **about,
+            "promise_id": promise_id,
+            "promised_date": transition.new_promise.promised_date,
+            "amount": transition.new_promise.amount,
+        }
+        emit(session, case.tenant_id, EventType.PROMISE_CREATED, promised, now)
 
 
 def _cancel_open_tasks(session: Session, case: Case, now: datetime) -> None:
@@ -164,8 +196,19 @@ def open_overdue_cases(session: Session, tenant: Tenant, now: datetime) -> int:
             .on_conflict_do_nothing(index_elements=[Case.invoice_id])
             .returning(Case.id)
         )
-        if session.execute(statement).scalar_one_or_none() is not None:
+        case_id = session.execute(statement).scalar_one_or_none()
+        if case_id is not None:
             opened += 1
+            opened_data = {
+                "case_id": case_id,
+                "customer_id": invoice.customer_id,
+                "invoice_id": invoice.id,
+                "invoice_number": invoice.number,
+                "amount_due": invoice.amount_due,
+                "currency": invoice.currency,
+                "due_date": invoice.due_date,
+            }
+            emit(session, tenant.id, EventType.CASE_OPENED, opened_data, now)
     return opened
 
 

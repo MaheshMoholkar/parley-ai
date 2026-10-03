@@ -3,8 +3,8 @@
 A collections agent: it chases overdue invoices for a business and hands a human
 only the cases that need judgement. The full design is in [docs/spec.md](docs/spec.md).
 
-**Status: milestones M1 to M5.** The service syncs invoices from a CSV aging
-report, runs each overdue invoice through the case state machine, drafts
+**Status: milestones M1 to M6.** The service syncs invoices from a CSV aging
+report or an ERP, runs each overdue invoice through the case state machine, drafts
 reminders with Claude (on Amazon Bedrock) and checks every draft in code, sends
 email through Amazon SES, reads customer replies, and records promises and
 disputes. When a customer says "we already paid" or disputes an invoice, an
@@ -12,7 +12,8 @@ investigator agent checks the records with read-only tools and hands a person a
 finding backed by record ids. A person approves drafts and takes over unclear
 cases on a small review screen. An eval suite measures the model's work and
 gates changes in CI. `GET /v1/metrics` reports collection results and model cost per case.
-Next: M6 (an ERP adapter) and M7 (voice).
+The source system can push change events, and every step of a case is posted
+to the tenant's webhook. Next: M7 (voice).
 
 By default it runs with no model and no email provider: reminders use a fixed
 template and are recorded instead of sent. See "Turning on the model and email".
@@ -32,7 +33,7 @@ uv run alembic upgrade head
 
 # 3. Create a tenant that reads the sample aging report
 uv run parley create-tenant --name "Acme Traders" --invoices-csv tests/fixtures/aging_20.csv
-#    -> prints a tenant id and an API key (shown once)
+#    -> prints a tenant id, an API key (shown once) and a webhook secret
 
 # 4. Run one worker round: sync, open cases, queue and "send" reminders
 uv run parley worker --once
@@ -83,6 +84,55 @@ missing or wrong records is set aside as "unclear". Either way a person gets the
 task: the investigator never closes a case or records a payment. Limits per run:
 8 steps, 2 tool retries, 20 rows per tool result, 60 seconds. Every step is
 stored in the run, so a run can be replayed and scored.
+
+## Connecting a source system and a webhook
+
+Each accounting adapter is a folder in `parley/adapters/accounting/` with a
+`KIND` and a `from_config` function; its docstring lists the settings it takes.
+To create a tenant for an ERP instead of a CSV, put those settings in a JSON file:
+
+```bash
+uv run parley create-tenant --name "Acme Traders" --adapter-config acme.json \
+    --webhook-url https://your-app.example/parley-events
+uv run parley set-webhook --tenant-id <id> --url ""     # stop webhooks later
+```
+
+Passwords and tokens in adapter settings are references, never the secret
+itself: `"env:NAME"` reads an environment variable, and `"aws:<secret arn>"`
+reads AWS Secrets Manager.
+
+**Events in.** The source system may post `invoice.created`, `invoice.updated`,
+`invoice.voided` or `payment.recorded` to `POST /v1/events`:
+
+```text
+POST /v1/events
+Authorization: Bearer <API key>
+X-Parley-Signature: sha256=<HMAC-SHA256 of the body with the webhook secret>
+
+{"id": "evt-123", "type": "payment.recorded", "data": {...}}
+```
+
+An event only asks for a fresh sync: the worker syncs that tenant on its next
+round instead of waiting for the interval. Invoice facts still come only from
+the sync, so a lost or repeated event does no harm (a repeated id is ignored).
+
+**Webhooks out.** When the tenant has a webhook URL, these are posted to it:
+`case.opened`, `message.sent`, `reply.received`, `promise.created`,
+`promise.broken`, `dispute.opened`, `task.created`, `case.closed`.
+
+```text
+X-Parley-Event-Id: <uuid>          the same on every retry: ignore ids you have seen
+X-Parley-Event-Type: case.opened
+X-Parley-Signature: sha256=<HMAC-SHA256 of the body with the webhook secret>
+
+{"id": "...", "type": "case.opened", "created_at": "...", "data": {"case_id": "...", ...}}
+```
+
+Events are written in the same transaction as the change (an outbox), then
+posted oldest first. Any 2xx answer counts as delivered; otherwise the event
+is retried after 1, 2, 4 ... minutes (at most 6 hours apart) and given up after
+10 attempts. Delivery is at least once, and a retried event can arrive after a
+newer one.
 
 To run everything in containers, use `docker compose up --build`. Put CSV files in
 `./data`, and pass `/data/<file>.csv` as the path when you create the tenant.
@@ -179,7 +229,10 @@ parley/
     clock.py       tell the time (faked in tests)
     model.py       call a model and get typed output back
   adapters/      implementations of the ports
-    accounting/csv/  reads an aging report CSV
+    accounting/    one folder per source system: csv/ reads an aging report,
+                   the others call an ERP's API (found by scanning the folder)
+    secrets.py     resolves "env:" and "aws:" secret references
+    webhook_http.py  posts one outbound webhook
     channels/      dry run, SES sending, inbound email parsing
     models/        Claude on Bedrock (single calls and agent sessions), a fake
     clock.py       real clock and fake clock
@@ -194,6 +247,8 @@ parley/
     audit.py       finds policy violations in the sent-message log
     tasks.py       a person approving, editing, rejecting, resuming, closing
     delivery.py    send pending messages from the outbox
+    events.py      record events pushed by the source system
+    webhooks.py    the outbound events outbox and its delivery
     worker.py      the background loop that runs all of the above
   api/           HTTP endpoints (FastAPI) and the review screen (review.html)
   cli.py         the `parley` command
@@ -203,7 +258,10 @@ tests/
     test_simulation_30_days.py   the M1 acceptance test
     test_walkthrough.py          the M2 acceptance test
     test_investigation.py        the M3 acceptance tests
+    test_events.py               events in and webhooks out
   harness/       the agent loop on its own, with toy tools
+  adapters/      each ERP adapter against a fake of that ERP's API, including
+                 the walkthrough with the ERP as the source (the M6 acceptance test)
 ```
 
 ## Reading guide

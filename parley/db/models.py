@@ -25,6 +25,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     MetaData,
@@ -49,6 +50,7 @@ from parley.core.domain import (
     ReplyIntent,
     TaskKind,
     TaskStatus,
+    WebhookStatus,
 )
 from parley.core.policy import Policy
 from parley.core.workflow import CaseView
@@ -107,6 +109,10 @@ class Tenant(Base):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Static payment link or UPI id included in reminders, if the tenant set one.
     payment_link: Mapped[str | None] = mapped_column(String(500))
+    # Where outbound events are posted; None means the tenant takes no webhooks.
+    webhook_url: Mapped[str | None] = mapped_column(String(500))
+    # Signs outbound events and verifies inbound ones (HMAC-SHA256).
+    webhook_secret: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = _created_at()
 
     @property
@@ -384,3 +390,41 @@ class UnmatchedInbound(Base):
     subject: Mapped[str] = mapped_column(String(500))
     body: Mapped[str] = mapped_column(Text)
     reason: Mapped[str] = mapped_column(String(200))
+
+
+class InboundEvent(Base):
+    """An event the source system pushed (`POST /v1/events`). Kept so a repeated
+    delivery of the same event id is recognised, and so the worker knows a sync
+    has been asked for since the last one."""
+
+    __tablename__ = "inbound_events"
+    __table_args__ = (UniqueConstraint("tenant_id", "event_id"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_fk()
+    event_id: Mapped[str] = mapped_column(String(200))
+    type: Mapped[str] = mapped_column(String(64))
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class OutboundEvent(Base):
+    """Outbox for webhooks (spec: "Outbound events"). Written in the same
+    transaction as the change it reports, then posted by the worker until the
+    receiver accepts it, so delivery is at least once."""
+
+    __tablename__ = "outbound_events"
+    __table_args__ = (Index("ix_outbound_events_due", "tenant_id", "status", "next_attempt_at"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    # Increases with every event, so events are posted in the order they happened.
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(), unique=True)
+    tenant_id: Mapped[uuid.UUID] = _tenant_fk()
+    type: Mapped[str] = mapped_column(String(64))
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    status: Mapped[WebhookStatus] = mapped_column(_enum(WebhookStatus))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

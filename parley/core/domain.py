@@ -117,3 +117,31 @@ UNSENT_STATUSES = frozenset(
 class Direction(StrEnum):
     OUTBOUND = "outbound"
     INBOUND = "inbound"
+
+
+class WebhookStatus(StrEnum):
+    PENDING = "pending"  # waiting for its first or next attempt
+    DELIVERED = "delivered"
+    FAILED = "failed"  # gave up after the last retry
+
+
+class EventType(StrEnum):
+    """Events sent to the tenant's webhook URL (spec: "Outbound events")."""
+
+    CASE_OPENED = "case.opened"
+    MESSAGE_SENT = "message.sent"
+    REPLY_RECEIVED = "reply.received"
+    PROMISE_CREATED = "promise.created"
+    PROMISE_BROKEN = "promise.broken"
+    DISPUTE_OPENED = "dispute.opened"
+    TASK_CREATED = "task.created"
+    CASE_CLOSED = "case.closed"
+
+
+class SourceEventType(StrEnum):
+    """Events the source system may push to `POST /v1/events`."""
+
+    INVOICE_CREATED = "invoice.created"
+    INVOICE_UPDATED = "invoice.updated"
+    INVOICE_VOIDED = "invoice.voided"
+    PAYMENT_RECORDED = "payment.recorded"

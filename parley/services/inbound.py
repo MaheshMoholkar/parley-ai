@@ -21,11 +21,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from parley.adapters.channels.email_inbound import reply_token
-from parley.core.domain import CaseState, Direction, MessageStatus
+from parley.core.domain import CaseState, Direction, EventType, MessageStatus
 from parley.db.models import Case, Customer, Message, MessageCase, UnmatchedInbound
 from parley.ports.channel import InboundMessage
 from parley.services.cases import cases_of_message
 from parley.services.runtime import Runtime
+from parley.services.webhooks import emit
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +83,12 @@ def receive_email(rt: Runtime, email: InboundMessage) -> ReceiveResult:
             session.add(
                 MessageCase(message_id=message.id, case_id=case.id, tenant_id=case.tenant_id)
             )
+        data = {
+            "message_id": message.id,
+            "customer_id": customer.id,
+            "case_ids": [case.id for case in cases],
+        }
+        emit(session, customer.tenant_id, EventType.REPLY_RECEIVED, data, now)
         return ReceiveResult("stored", message_id=message.id)
 
 

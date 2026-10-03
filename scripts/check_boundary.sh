@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Spec boundary check: "Vyavasay" and "GST" may appear only inside the Vyavasay
-# adapter, so the core stays independent of any one accounting system.
+# adapter (and its tests), so the core stays independent of any one accounting system.
 # docs/ is excluded because the spec itself talks about both, and evals/datasets/
 # because it holds customers' own words, which may mention tax.
 set -euo pipefail
@@ -10,6 +10,7 @@ hits=$(git grep -n -I -E 'GST|[Vv]yavasay|VYAVASAY' -- . \
   ':!docs/' \
   ':!evals/datasets/' \
   ':!parley/adapters/accounting/vyavasay/' \
+  ':!tests/adapters/vyavasay/' \
   ':!scripts/check_boundary.sh' || true)
 
 if [[ -n "$hits" ]]; then

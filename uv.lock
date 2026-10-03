@@ -167,6 +167,9 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+secretsmanager = [
+    { name = "mypy-boto3-secretsmanager" },
+]
 sesv2 = [
     { name = "mypy-boto3-sesv2" },
 ]
@@ -791,6 +794,15 @@ wheels = [
 ]
 
 [[package]]
+name = "mypy-boto3-secretsmanager"
+version = "1.43.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/e0/3b9f954dcce063407224e6601ed5af2d684185387b0572901c5f984fc8f6/mypy_boto3_secretsmanager-1.43.0.tar.gz", hash = "sha256:265ee2fddf9d3e42ae39685625fb7861a539110d8e324372847c0e1cbd666b20", size = 19967, upload-time = "2026-04-29T23:05:45.139Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/93/ae939d61eed240972553395b5e31f780825685b99f0ab4ebe5767430f103/mypy_boto3_secretsmanager-1.43.0-py3-none-any.whl", hash = "sha256:38415cdecb73dd20e485707a7cf456f6dde54ff4b155e7fb255eb001eb47d5bc", size = 27335, upload-time = "2026-04-29T23:05:43.152Z" },
+]
+
+[[package]]
 name = "mypy-boto3-sesv2"
 version = "1.43.105"
 source = { registry = "https://pypi.org/simple" }
@@ -838,6 +850,7 @@ dependencies = [
     { name = "anthropic", extra = ["bedrock"] },
     { name = "boto3" },
     { name = "fastapi" },
+    { name = "httpx2" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -848,7 +861,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "boto3-stubs", extra = ["sesv2"] },
+    { name = "boto3-stubs", extra = ["secretsmanager", "sesv2"] },
     { name = "httpx2" },
     { name = "import-linter" },
     { name = "mypy" },
@@ -862,6 +875,7 @@ requires-dist = [
     { name = "anthropic", extras = ["bedrock"], specifier = ">=1.11.0" },
     { name = "boto3", specifier = ">=1.43.107" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx2", specifier = ">=2.13" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pydantic-settings", specifier = ">=2.4" },
@@ -872,7 +886,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "boto3-stubs", extras = ["sesv2"], specifier = ">=1.43.107" },
+    { name = "boto3-stubs", extras = ["secretsmanager", "sesv2"], specifier = ">=1.43.107" },
     { name = "httpx2", specifier = ">=2.13" },
     { name = "import-linter", specifier = ">=2.1" },
     { name = "mypy", specifier = ">=1.11" },

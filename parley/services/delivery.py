@@ -12,12 +12,13 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from parley.core.domain import Direction, MessageStatus
+from parley.core.domain import Direction, EventType, MessageStatus
 from parley.core.workflow import on_delivery_failed
 from parley.db.models import Case, Message, MessageCase
 from parley.ports.channel import OutboundMessage
-from parley.services.cases import apply_transition
+from parley.services.cases import apply_transition, cases_of_message
 from parley.services.runtime import Runtime
+from parley.services.webhooks import emit
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +85,13 @@ def _deliver(rt: Runtime, session: Session, message: Message) -> bool:
     message.provider_message_id = provider_id
     message.sent_at = now
     message.last_error = None
+    data = {
+        "message_id": message.id,
+        "customer_id": message.customer_id,
+        "case_ids": [case.id for case in cases_of_message(session, message.id)],
+        "channel": message.channel,
+    }
+    emit(session, message.tenant_id, EventType.MESSAGE_SENT, data, now)
     return True
 
 

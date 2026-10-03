@@ -26,7 +26,7 @@ from parley.collections_ai.jobs import (
     judge_tone,
 )
 from parley.core.checks import check_draft
-from parley.core.domain import Direction, MessageStatus, TaskKind, TaskStatus
+from parley.core.domain import Direction, EventType, MessageStatus, TaskKind, TaskStatus
 from parley.core.messages import InvoiceLine
 from parley.core.money import format_money
 from parley.db.models import Customer, Message, MessageCase, Task, Tenant
@@ -34,6 +34,7 @@ from parley.ports.model import ModelError, ModelPort
 from parley.services.cases import cases_of_message, invoice_line, record_amounts
 from parley.services.model_calls import run_job
 from parley.services.runtime import Runtime
+from parley.services.webhooks import emit
 
 log = logging.getLogger(__name__)
 
@@ -174,8 +175,10 @@ def _ask_for_approval(
     session: Session, message: Message, case_id: uuid.UUID, summary: str, rt: Runtime
 ) -> None:
     message.status = MessageStatus.AWAITING_APPROVAL
+    task_id = uuid.uuid4()
     session.add(
         Task(
+            id=task_id,
             tenant_id=message.tenant_id,
             case_id=case_id,
             message_id=message.id,
@@ -185,6 +188,13 @@ def _ask_for_approval(
             created_at=rt.clock.now(),
         )
     )
+    data = {
+        "case_id": case_id,
+        "customer_id": message.customer_id,
+        "task_id": task_id,
+        "kind": TaskKind.APPROVE_SEND,
+    }
+    emit(session, message.tenant_id, EventType.TASK_CREATED, data, rt.clock.now())
 
 
 def _describe(lines: list[InvoiceLine]) -> str:

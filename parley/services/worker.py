@@ -1,13 +1,15 @@
 """The background worker: one loop that keeps every tenant's cases moving.
 
 Each round, for each tenant:
-1. sync from the source system, if the last sync is older than the interval;
+1. sync from the source system, if the last sync is older than the interval
+   or the source has pushed an event since;
 2. open cases for invoices that have become overdue;
 3. read customer replies and act on them;
 4. investigate paid claims and disputes;
 5. act on due cases (reminders, escalations, timeouts);
 6. draft queued reminders (model, checks, approval gate);
-7. deliver pending messages from the outbox.
+7. deliver pending messages from the outbox;
+8. post pending events to the tenant's webhook.
 
 Several worker processes can run at once; the row locks in each step keep them
 from doing the same work twice.
@@ -27,10 +29,12 @@ from parley.services.cases import open_overdue_cases
 from parley.services.delivery import deliver_pending_messages
 from parley.services.drafting import draft_queued_messages
 from parley.services.due_cases import run_due_cases
+from parley.services.events import latest_event_at
 from parley.services.investigation import run_investigations
 from parley.services.replies import read_received_replies
 from parley.services.runtime import Runtime
 from parley.services.sync import sync_tenant
+from parley.services.webhooks import deliver_webhooks
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +59,11 @@ def run_tenant_once(
     sync_interval: timedelta,
 ) -> None:
     now = rt.clock.now()
-    if last_synced_at is None or now - last_synced_at >= sync_interval:
+    with rt.session_factory() as session:
+        event_at = latest_event_at(session, tenant_id)
+    due = last_synced_at is None or now - last_synced_at >= sync_interval
+    pushed = event_at is not None and last_synced_at is not None and event_at > last_synced_at
+    if due or pushed:
         try:
             sync_tenant(rt, tenant_id)
         except Exception:
@@ -69,6 +77,7 @@ def run_tenant_once(
     run_due_cases(rt, tenant_id)
     draft_queued_messages(rt, tenant_id)
     deliver_pending_messages(rt, tenant_id)
+    deliver_webhooks(rt, tenant_id)
 
 
 def run_forever(rt: Runtime, sync_interval: timedelta, poll_seconds: float) -> None:

@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from harness import AgentModel, Limits
+from parley.adapters.webhook_http import post_webhook
 from parley.db.models import Tenant
 from parley.db.session import SessionFactory
 from parley.ports.accounting import AccountingPort
@@ -32,3 +33,5 @@ class Runtime:
     inbound_secret: str = ""
     # USD per million tokens (input, output), keyed by model id.
     model_prices: Mapping[str, tuple[float, float]] = field(default_factory=dict)
+    # Posts one webhook (url, body, headers) and returns the HTTP status.
+    post_webhook: Callable[[str, bytes, dict[str, str]], int] = field(default=post_webhook)

@@ -11,6 +11,8 @@ every step.
               investigator reads the contact history and cites the reply;
               a person gets a review task with that evidence, and no
               further reminders go out
+
+Each step is also posted to the tenant's webhook as an outbound event.
 """
 
 import hashlib
@@ -38,6 +40,7 @@ from parley.core.domain import (
 )
 from parley.db.models import Case, Message, Promise, Task
 from parley.services.runtime import Runtime
+from parley.services.tenants import set_webhook_url
 from parley.services.worker import run_once
 from tests.integration.conftest import IST, START, invoice_row, make_tenant, write_aging
 
@@ -89,7 +92,17 @@ def test_reminder_promise_broken_promise_dispute(
     rt.inbound_secret = SECRET
     client = TestClient(create_app(rt))
     aging = write_aging(tmp_path / "aging.csv", [invoice_row("A-1", "Asha", "1000", "2026-01-01")])
-    make_tenant(rt, aging, approval_mode="none")
+    tenant_id = make_tenant(rt, aging, approval_mode="none")
+    # Every step is also reported to the tenant's webhook.
+    webhook_posts: list[bytes] = []
+
+    def receive_webhook(url: str, body: bytes, headers: dict[str, str]) -> int:
+        webhook_posts.append(body)
+        return 200
+
+    rt.post_webhook = receive_webhook
+    with rt.session_factory.begin() as session:
+        set_webhook_url(session, tenant_id, "https://host.example/hooks")
 
     def day(n: int) -> None:
         clock.set(datetime.combine(START.date() + timedelta(days=n), time(10, 0), tzinfo=IST))
@@ -162,3 +175,15 @@ def test_reminder_promise_broken_promise_dispute(
         assert task.kind == TaskKind.REVIEW_DISPUTE
         assert task.agent_run_id is not None
         assert "Evidence: inbound message of 13 Jan 2026" in task.summary
+
+    assert [json.loads(body)["type"] for body in webhook_posts] == [
+        "case.opened",
+        "message.sent",
+        "reply.received",
+        "promise.created",
+        "promise.broken",
+        "message.sent",
+        "reply.received",
+        "dispute.opened",
+        "task.created",
+    ]

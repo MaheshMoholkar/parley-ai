@@ -1,4 +1,4 @@
-"""HTTP endpoints (spec: "API and events"). M1 covers sync, cases, pause and tasks."""
+"""HTTP endpoints (spec: "API and events")."""
 
 import hashlib
 import hmac
@@ -8,8 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
+from pydantic import ValidationError
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
@@ -22,6 +23,8 @@ from parley.api.schemas import (
     CaseOut,
     CasePage,
     CustomerOut,
+    EventIn,
+    EventOut,
     InboundOut,
     MessageOut,
     MetricsOut,
@@ -34,6 +37,7 @@ from parley.core.domain import CaseState, TaskStatus
 from parley.db.models import Case, Message, MessageCase, Task
 from parley.services.accounting import AdapterConfigError
 from parley.services.cases import NotFoundError, set_case_paused, set_customer_paused
+from parley.services.events import record_event
 from parley.services.inbound import receive_email
 from parley.services.metrics import tenant_metrics
 from parley.services.sync import SyncError, sync_tenant
@@ -70,6 +74,43 @@ def sync_now(rt: RuntimeDep, tenant: TenantDep) -> SyncOut:
         # The source data or adapter settings are wrong; nothing was saved.
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
     return SyncOut(**asdict(result))
+
+
+async def raw_body(request: Request) -> bytes:
+    return await request.body()
+
+
+MAX_EVENT_BYTES = 256 * 1024
+
+
+@router.post("/v1/events", status_code=status.HTTP_202_ACCEPTED)
+def receive_source_event(
+    rt: RuntimeDep,
+    session: SessionDep,
+    tenant: TenantDep,
+    body: Annotated[bytes, Depends(raw_body)],
+    signature: Annotated[str | None, Header(alias="X-Parley-Signature")] = None,
+) -> EventOut:
+    """Receive `invoice.created`, `invoice.updated`, `invoice.voided` or
+    `payment.recorded` from the source system.
+
+    Needs the tenant's API key, and the body signed with the tenant's webhook
+    secret: `X-Parley-Signature: sha256=<hex HMAC-SHA256 of the body>`. Each
+    new event makes the worker sync this tenant on its next round; a repeated
+    event id is acknowledged and ignored.
+    """
+    if len(body) > MAX_EVENT_BYTES:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "event too large")
+    if not valid_signature(body, signature, tenant.webhook_secret):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "bad or missing signature")
+    try:
+        event = EventIn.model_validate_json(body)
+    except ValidationError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, exc.errors(include_url=False)
+        ) from None
+    new = record_event(session, tenant, event.id, event.type, event.data, rt.clock.now())
+    return EventOut(outcome="accepted" if new else "duplicate")
 
 
 @router.get("/v1/cases")

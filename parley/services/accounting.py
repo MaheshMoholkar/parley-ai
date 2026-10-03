@@ -1,19 +1,18 @@
 """Picks the accounting adapter a tenant is configured to use."""
 
-from parley.adapters.accounting.csv import CsvAccountingAdapter
+from parley.adapters.accounting import AdapterConfigError, adapter_factories
 from parley.db.models import Tenant
 from parley.ports.accounting import AccountingPort
 
-
-class AdapterConfigError(ValueError):
-    pass
+__all__ = ["AdapterConfigError", "accounting_adapter_for"]
 
 
 def accounting_adapter_for(tenant: Tenant) -> AccountingPort:
-    config = tenant.adapter_config
-    kind = config.get("kind")
-    if kind == "csv":
-        if not config.get("invoices_path"):
-            raise AdapterConfigError(f"tenant {tenant.id}: csv adapter needs invoices_path")
-        return CsvAccountingAdapter(config["invoices_path"], config.get("payments_path"))
-    raise AdapterConfigError(f"tenant {tenant.id}: unknown accounting adapter {kind!r}")
+    kind = tenant.adapter_config.get("kind")
+    factory = adapter_factories().get(str(kind))
+    if factory is None:
+        raise AdapterConfigError(f"tenant {tenant.id}: unknown accounting adapter {kind!r}")
+    try:
+        return factory(tenant.adapter_config)
+    except AdapterConfigError as exc:
+        raise AdapterConfigError(f"tenant {tenant.id}: {exc}") from None

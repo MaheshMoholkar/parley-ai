@@ -80,7 +80,7 @@ The core keeps its own copy of customers, invoices and payments in one fixed sha
 
 | Table | Key fields | Owner |
 | --- | --- | --- |
-| `tenant` | name, timezone, policy settings, adapter config, default language, API key hash | Core |
+| `tenant` | name, timezone, policy settings, adapter config, default language, API key hash, webhook URL and secret | Core |
 | `customer` | source, external\_id, name, contacts, language, brief, paused | Source system (brief and paused: core) |
 | `invoice` | source, external\_id, customer\_id, number, amount\_due, currency, due\_date, status (open, paid, void, removed), display\_details | Source system |
 | `payment` | source, external\_id, customer\_id, amount, paid\_on, reference | Source system |
@@ -93,6 +93,8 @@ The core keeps its own copy of customers, invoices and payments in one fixed sha
 | `agent_run` | case\_id, steps, tokens, cost, outcome | Core |
 | `model_call` | job prompt version, tier, model, tokens, estimated cost, latency, ok or error | Core |
 | `unmatched_inbound` | sender, recipients, subject, body, reason (mail that matched no case) | Core |
+| `inbound_event` | event id (unique per tenant), type, data, received\_at (events pushed by the source system) | Core |
+| `outbound_event` | type, data, status (pending, delivered, failed), attempts, next\_attempt\_at (the webhook outbox) | Core |
 
 **Rules**
 
@@ -141,9 +143,10 @@ Each adapter also declares two optional capabilities.
 
 - Calls Vyavasay REST endpoints with a per-tenant API key.
 - Receives Vyavasay webhooks and translates them into the four events.
+- As built (M6): Vyavasay has no webhooks yet, so it is to post the four events in the core's own format to `POST /v1/events` (below). Until then the timer sync is enough. Login is either an API token or a dedicated read-only Vyavasay user (phone, password, Vyavasay tenant id); secrets are stored as `env:` or `aws:` references, never in the database. Amount due is Vyavasay's balance minus the open balance of posted credit notes on the invoice; a missing due date falls back to the invoice date; a cheque counts as a payment only once cleared.
 - Vyavasay needs only this: four read endpoints, two webhooks (invoice posted, payment recorded), and optionally a panel that reads case status from the core's API.
 
-**Boundary check:** a search of the code for "Vyavasay" or "GST" must return hits only inside `parley/adapters/accounting/vyavasay/`. `docs/` and the eval datasets (customer text) are excluded. CI runs this check.
+**Boundary check:** a search of the code for "Vyavasay" or "GST" must return hits only inside `parley/adapters/accounting/vyavasay/`. `docs/`, the eval datasets (customer text) and the adapter's own tests (`tests/adapters/vyavasay/`) are excluded. CI runs this check.
 
 ## Collections workflow
 
@@ -417,6 +420,12 @@ A host application integrates through a small REST API and a set of signed outbo
 
 - Delivered to a webhook URL in the tenant's config.
 - Each event has an id, and delivery is at least once, so the receiver ignores an id it has already seen.
+- As built (M6): events are written to an outbox in the same transaction as the change, and a worker step posts them oldest first with headers `X-Parley-Event-Id`, `X-Parley-Event-Type` and `X-Parley-Signature: sha256=<HMAC of the body with the tenant's webhook secret>`. A 2xx is delivered; anything else is retried after 1, 2, 4 ... minutes (at most 6 hours apart) and given up after 10 attempts. A tenant without a webhook URL gets no events queued.
+
+**Inbound events (as built, M6)**
+
+- `POST /v1/events` takes `{"id", "type", "data"}` with the tenant's API key and the same signature header, made with the tenant's webhook secret.
+- An event is a hint, not a fact: it is recorded (a repeated id is ignored), and the worker runs a full sync of that tenant on its next round instead of waiting for the sync interval. Sync stays the only path by which invoice facts change, so a lost or reordered event cannot leave wrong numbers behind.
 
 **Review screen:** the service ships one minimal web page that lists tasks and lets a human approve, edit or reject. A host application can use this page or build its own on the tasks endpoints.
 

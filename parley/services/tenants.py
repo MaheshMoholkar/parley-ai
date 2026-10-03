@@ -1,8 +1,10 @@
-"""Creating tenants and finding a tenant from its API key."""
+"""Creating tenants, their webhook settings, and finding a tenant from its API key."""
 
 import hashlib
 import secrets
+import uuid
 from typing import Any
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -26,13 +28,16 @@ def create_tenant(
     timezone: str,
     adapter_config: dict[str, Any],
     policy_overrides: dict[str, Any] | None = None,
+    webhook_url: str | None = None,
 ) -> tuple[Tenant, str]:
     """Create a tenant and return it with its API key. The key is not stored and
-    cannot be shown again."""
+    cannot be shown again. A webhook secret is generated; it is stored, because
+    every outbound event is signed with it (see `tenant.webhook_secret`)."""
     try:
         ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError):
         raise ValueError(f"unknown timezone {timezone!r}") from None
+    _check_webhook_url(webhook_url)
     overrides = policy_overrides or {}
     Policy.model_validate(overrides)  # fail now, not on the first worker run
 
@@ -43,10 +48,25 @@ def create_tenant(
         adapter_config=adapter_config,
         policy_overrides=overrides,
         api_key_hash=hash_api_key(api_key),
+        webhook_url=webhook_url,
+        webhook_secret=secrets.token_hex(32),
     )
     session.add(tenant)
     session.flush()  # assigns the id
     return tenant, api_key
+
+
+def set_webhook_url(session: Session, tenant_id: uuid.UUID, url: str | None) -> Tenant:
+    """Set or (with None) remove the URL outbound events are posted to."""
+    _check_webhook_url(url)
+    tenant = session.get_one(Tenant, tenant_id, with_for_update=True)
+    tenant.webhook_url = url
+    return tenant
+
+
+def _check_webhook_url(url: str | None) -> None:
+    if url is not None and urlsplit(url).scheme not in ("https", "http"):
+        raise ValueError(f"webhook URL must start with https:// or http:// (got {url!r})")
 
 
 def find_tenant_by_api_key(session: Session, api_key: str) -> Tenant | None:

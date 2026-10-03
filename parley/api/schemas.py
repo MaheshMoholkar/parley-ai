@@ -3,9 +3,9 @@ straight from database objects."""
 
 import uuid
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from parley.core.domain import (
     CaseState,
@@ -13,6 +13,7 @@ from parley.core.domain import (
     Direction,
     InvoiceStatus,
     MessageStatus,
+    SourceEventType,
     TaskAction,
     TaskKind,
     TaskStatus,
@@ -133,6 +134,19 @@ class InboundOut(BaseModel):
     outcome: Literal["stored", "duplicate", "unmatched"]
     message_id: uuid.UUID | None = None
     reason: str = ""
+
+
+class EventIn(BaseModel):
+    """An event from the source system. `data` is kept for the record; the
+    worker re-reads the source rather than trusting it."""
+
+    id: str = Field(min_length=1, max_length=200)
+    type: SourceEventType
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class EventOut(BaseModel):
+    outcome: Literal["accepted", "duplicate"]
 
 
 class SyncOut(BaseModel):
