@@ -28,13 +28,22 @@ parley = "parley.cli:main"
 
 [dependency-groups]
 dev = [
-    "boto3-stubs[secretsmanager,sesv2]>=1.43.107",
+    "boto3-stubs[s3,secretsmanager,sesv2]>=1.43.107",
     "httpx2>=2.13",
     "import-linter>=2.1",
     "mypy>=1.11",
     "pytest>=8.3",
     "ruff>=0.6",
 ]
+infra = [
+    "aws-cdk-lib>=2.272.0",
+    "constructs>=10.8.1",
+]
+
+[tool.uv]
+# The CDK (infra group) is installed for local work and CI, but not in the
+# Docker image, which installs only the app's own dependencies.
+default-groups = ["dev", "infra"]
 
 [build-system]
 requires = ["hatchling"]
@@ -53,7 +62,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
-packages = ["parley", "harness", "evalkit", "evals"]
+packages = ["parley", "harness", "evalkit", "evals", "infra"]
 
 [[tool.mypy.overrides]]
 # The Bedrock streaming SDK ships without type information.
@@ -66,7 +75,7 @@ addopts = "-q"
 
 # Architecture rules, checked in CI by `lint-imports`.
 [tool.importlinter]
-root_packages = ["parley", "harness", "evalkit", "evals"]
+root_packages = ["parley", "harness", "evalkit", "evals", "infra"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -133,3 +142,8 @@ name = "the eval toolkit is generic: it knows nothing about this project"
 type = "forbidden"
 source_modules = ["evalkit"]
 forbidden_modules = ["parley", "harness", "evals", "sqlalchemy", "fastapi", "anthropic"]
+
+[[tool.importlinter.contracts]]
+name = "the infrastructure and the app are independent"
+type = "independence"
+modules = ["parley", "infra"]

@@ -1,9 +1,12 @@
+import io
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from parley.adapters.accounting.csv import CsvAccountingAdapter, CsvFormatError
+from parley.adapters.accounting.csv import adapter as csv_adapter
 from parley.core.domain import InvoiceStatus
 
 HEADER = (
@@ -101,3 +104,22 @@ def test_reads_payments(tmp_path: Path) -> None:
     recent = adapter.list_payments_since(date(2026, 1, 1))
     assert [(p.external_id, p.amount, p.reference) for p in recent] == [("P1", 500, "UTR123")]
     assert [p.external_id for p in adapter.list_payments_since(date(2025, 1, 1), "C2")] == ["P2"]
+
+
+def test_files_can_be_read_from_s3(monkeypatch: pytest.MonkeyPatch) -> None:
+    text = (
+        "﻿invoice_number,customer_name,amount_due,currency,due_date\nS-1,Asha,100,INR,2026-01-01\n"
+    )
+    asked: list[tuple[str, str]] = []
+
+    class FakeS3:
+        def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:
+            asked.append((Bucket, Key))
+            return {"Body": io.BytesIO(text.encode("utf-8"))}
+
+    monkeypatch.setattr(csv_adapter.boto3, "client", lambda service: FakeS3())
+    adapter = CsvAccountingAdapter("s3://parley-data/acme/aging.csv")
+
+    [invoice] = adapter.list_open_invoices()
+    assert (invoice.number, invoice.amount_due) == ("S-1", 10000)
+    assert asked == [("parley-data", "acme/aging.csv")]

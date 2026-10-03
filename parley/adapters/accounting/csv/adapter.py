@@ -16,12 +16,18 @@ is no longer open, so `get_invoice` returns None for it.
 
 Payments file columns: payment_id, customer_id (or customer_name), amount,
 currency, paid_on (YYYY-MM-DD) and an optional reference.
+
+Paths are local files, or "s3://bucket/key" for files in S3 (as on AWS, where
+the container has no files of its own). Each sync reads the files again.
 """
 
 import csv
+import io
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+
+import boto3
 
 from parley.core.domain import InvoiceStatus
 from parley.core.money import MoneyError, to_minor_units
@@ -34,7 +40,7 @@ PAYMENT_COLUMNS = {"payment_id", "amount", "currency", "paid_on"}
 class CsvFormatError(ValueError):
     """The file has missing columns or bad rows. Lists every problem found."""
 
-    def __init__(self, path: Path, problems: list[str]) -> None:
+    def __init__(self, path: Path | str, problems: list[str]) -> None:
         self.path = path
         self.problems = problems
         super().__init__(f"{path}: " + "; ".join(problems))
@@ -51,8 +57,8 @@ class CsvAccountingAdapter:
     source = "csv"
 
     def __init__(self, invoices_path: Path | str, payments_path: Path | str | None = None) -> None:
-        self.invoices_path = Path(invoices_path)
-        self.payments_path = Path(payments_path) if payments_path else None
+        self.invoices_path = _location(invoices_path)
+        self.payments_path = _location(payments_path) if payments_path else None
         self._data: _Data | None = None
 
     # --- AccountingPort methods ----------------------------------------------
@@ -142,10 +148,25 @@ class CsvAccountingAdapter:
             raise CsvFormatError(self.payments_path, problems)
 
 
-def _read_rows(path: Path, required_columns: set[str]) -> list[tuple[int, dict[str, str]]]:
-    """Return (line number, row) pairs with normalised headers and trimmed values."""
+def _location(path: Path | str) -> Path | str:
+    """An S3 address stays a string ("s3://..." is not a file path); anything
+    else is a local file."""
+    text = str(path)
+    return text if text.startswith("s3://") else Path(text)
+
+
+def _read_text(path: Path | str) -> str:
     # "utf-8-sig" also accepts files saved by Excel, which start with a byte-order mark.
-    with path.open(newline="", encoding="utf-8-sig") as f:
+    if isinstance(path, str):
+        bucket, _, key = path.removeprefix("s3://").partition("/")
+        body = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
+        return bytes(body).decode("utf-8-sig")
+    return path.read_text(encoding="utf-8-sig")
+
+
+def _read_rows(path: Path | str, required_columns: set[str]) -> list[tuple[int, dict[str, str]]]:
+    """Return (line number, row) pairs with normalised headers and trimmed values."""
+    with io.StringIO(_read_text(path), newline="") as f:
         reader = csv.reader(f)
         header = next(reader, None)
         if header is None:
