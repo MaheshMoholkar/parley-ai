@@ -1,6 +1,13 @@
-"""Builds the production Runtime from settings. Used by the API and the CLI."""
+"""Builds the production Runtime from settings, and sets up logging and
+tracing. Used by the API and the CLI."""
 
 import logging
+
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from parley.adapters.channels.dry_run import DryRunChannel
 from parley.adapters.channels.email_ses import SesEmailChannel
@@ -61,8 +68,38 @@ def build_runtime(settings: Settings | None = None) -> Runtime:
 
 
 def configure_logging(settings: Settings | None = None) -> None:
+    """Log lines carry the trace id of the step they belong to, so a log line
+    leads to its trace and back ("-" outside any step)."""
     settings = settings or get_settings()
-    logging.basicConfig(
-        level=settings.log_level.upper(),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handler = logging.StreamHandler()
+    handler.addFilter(_TraceIdFilter())
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s [trace %(trace_id)s]: %(message)s")
     )
+    logging.basicConfig(level=settings.log_level.upper(), handlers=[handler])
+
+
+class _TraceIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        context = trace.get_current_span().get_span_context()
+        record.trace_id = format(context.trace_id, "032x") if context.is_valid else "-"
+        return True
+
+
+def configure_tracing(settings: Settings, process: str) -> bool:
+    """Send spans over OTLP/HTTP when PARLEY_TRACING=otlp. Returns whether
+    tracing is on.
+
+    The exporter reads the standard OpenTelemetry variables, chiefly
+    OTEL_EXPORTER_OTLP_ENDPOINT (default http://localhost:4318). On AWS, run the
+    AWS Distro for OpenTelemetry collector beside the container; it receives
+    OTLP on that address and forwards traces to CloudWatch (X-Ray).
+    """
+    if settings.tracing != "otlp":
+        return False
+    resource = Resource.create({"service.name": settings.service_name, "parley.process": process})
+    provider = TracerProvider(resource=resource)
+    # Spans are sent in batches from a background thread, and flushed at exit.
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    trace.set_tracer_provider(provider)
+    return True

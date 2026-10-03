@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # How long the worker sleeps between rounds when there is nothing to do.
     worker_poll_seconds: int = 30
     log_level: str = "INFO"
+    # "otlp" sends traces to an OpenTelemetry collector (see bootstrap.configure_tracing).
+    tracing: Literal["off", "otlp"] = "off"
+    service_name: str = "parley"
 
     # --- Email ---
     # "dry_run" records messages instead of sending; "ses" sends with Amazon SES.

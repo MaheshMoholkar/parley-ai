@@ -15,7 +15,7 @@ Steps:
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
@@ -27,6 +27,7 @@ from parley.db.models import Case, Customer, Invoice, Payment, Tenant
 from parley.ports.accounting import AccountingPort, SourceInvoice, SourcePayment
 from parley.services.cases import apply_transition, open_overdue_cases
 from parley.services.runtime import Runtime
+from parley.services.tracing import annotate, step
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class SyncResult:
 def sync_tenant(rt: Runtime, tenant_id: uuid.UUID) -> SyncResult:
     now = rt.clock.now()
     result = SyncResult()
-    with rt.session_factory.begin() as session:
+    with step("sync", tenant_id=tenant_id) as span, rt.session_factory.begin() as session:
         tenant = session.get_one(Tenant, tenant_id, with_for_update=True)
         accounting = rt.accounting_for(tenant)
         customers = _Customers(session, tenant, accounting)
@@ -70,6 +71,7 @@ def sync_tenant(rt: Runtime, tenant_id: uuid.UUID) -> SyncResult:
         _update_cases(session, touched, now, result)
         result.cases_opened = open_overdue_cases(session, tenant, now)
         tenant.last_synced_at = now
+        annotate(span, source=accounting.source, **asdict(result))
 
     log.info("synced tenant %s: %s", tenant_id, result)
     return result

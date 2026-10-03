@@ -45,6 +45,7 @@ from parley.ports.model import TokenUsage
 from parley.services.cases import apply_transition, invoice_line
 from parley.services.model_calls import estimate_cost_micro_usd
 from parley.services.runtime import Runtime
+from parley.services.tracing import annotate, step
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +76,17 @@ def run_investigations(rt: Runtime, tenant_id: uuid.UUID) -> int:
             if run is None:
                 return done
             tried.add(run.id)
-            _investigate(rt, session, run)
+            with step(
+                "investigate",
+                tenant_id=tenant_id,
+                agent_run_id=run.id,
+                case_ids=[run.case_id],
+                claim=run.claim,
+            ) as span:
+                _investigate(rt, session, run)
+                annotate(
+                    span, outcome=run.outcome, result=run.result, cost_micro_usd=run.cost_micro_usd
+                )
             done += 1
 
 

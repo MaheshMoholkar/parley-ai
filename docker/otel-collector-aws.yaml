@@ -1,0 +1,31 @@
+# AWS Distro for OpenTelemetry (ADOT) collector config: run the collector as a
+# sidecar next to the parley container on ECS, with PARLEY_TRACING=otlp in
+# parley's environment. Parley sends spans to the sidecar over OTLP/HTTP
+# (localhost:4318, the default), and the sidecar sends them to CloudWatch
+# (X-Ray traces, viewed under CloudWatch > Traces).
+#
+# The task role needs xray:PutTraceSegments and xray:PutTelemetryRecords.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  awsxray:
+    # Lets the parley.* attributes be searched as annotations in X-Ray.
+    indexed_attributes:
+      - parley.tenant_id
+      - parley.customer_id
+      - parley.message_id
+      - parley.call_id
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awsxray]

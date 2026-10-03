@@ -20,6 +20,7 @@ from parley.ports.voice import VoiceError
 from parley.services.calls import VOICE, place_reminder_call
 from parley.services.cases import apply_transition, cases_of_message
 from parley.services.runtime import Runtime
+from parley.services.tracing import annotate, step
 from parley.services.webhooks import emit
 
 log = logging.getLogger(__name__)
@@ -38,7 +39,16 @@ def deliver_pending_messages(rt: Runtime, tenant_id: uuid.UUID) -> int:
             if message is None:
                 return sent
             tried.add(message.id)
-            if _deliver(rt, session, message):
+            with step(
+                "deliver_message",
+                tenant_id=tenant_id,
+                message_id=message.id,
+                channel=message.channel,
+                attempt=message.attempts + 1,
+            ) as span:
+                delivered = _deliver(rt, session, message)
+                annotate(span, status=message.status, error=message.last_error)
+            if delivered:
                 sent += 1
 
 

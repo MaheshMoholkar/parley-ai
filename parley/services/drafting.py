@@ -35,6 +35,7 @@ from parley.services.calls import VOICE
 from parley.services.cases import cases_of_message, invoice_line, record_amounts
 from parley.services.model_calls import run_job
 from parley.services.runtime import Runtime
+from parley.services.tracing import annotate, step
 from parley.services.webhooks import emit
 
 log = logging.getLogger(__name__)
@@ -77,7 +78,14 @@ def draft_queued_messages(rt: Runtime, tenant_id: uuid.UUID) -> int:
             if message is None:
                 return drafted
             tried.add(message.id)
-            _draft_message(rt, session, message)
+            with step(
+                "draft_message",
+                tenant_id=tenant_id,
+                message_id=message.id,
+                channel=message.channel,
+            ) as span:
+                _draft_message(rt, session, message)
+                annotate(span, status=message.status)
             drafted += 1
 
 

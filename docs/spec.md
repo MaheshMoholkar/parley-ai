@@ -43,7 +43,7 @@ Invoices and payments enter from the left through an accounting adapter. Message
 | Email | Amazon SES | Sending and receiving |
 | File storage | Amazon S3 | Inbound mail and uploaded CSV files |
 | Secrets | AWS Secrets Manager | Tenant API keys and adapter credentials |
-| Tracing and logs | OpenTelemetry to CloudWatch | One trace per case step |
+| Tracing and logs | OpenTelemetry to CloudWatch | One trace per case step (as built: OTLP to an ADOT collector sidecar, which exports to X-Ray; log lines carry the trace id) |
 | Voice | Nova 2 Sonic on Bedrock, Twilio | Added in M7 |
 | CI | GitHub Actions | Tests, evals, boundary check |
 
