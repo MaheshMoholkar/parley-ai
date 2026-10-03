@@ -1,0 +1,45 @@
+# Local development: Postgres, a one-off migration, the API and the worker.
+#   docker compose up --build
+# Put CSV files in ./data; containers see them under /data.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: parley
+      POSTGRES_PASSWORD: parley
+      POSTGRES_DB: parley
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/create-test-db.sql:/docker-entrypoint-initdb.d/create-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U parley"]
+      interval: 2s
+      retries: 20
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment: &app-env
+      PARLEY_DATABASE_URL: postgresql+psycopg://parley:parley@db:5432/parley
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    build: .
+    environment: *app-env
+    ports: ["8000:8000"]
+    volumes: ["./data:/data:ro"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    build: .
+    command: ["parley", "worker"]
+    environment: *app-env
+    volumes: ["./data:/data:ro"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+volumes:
+  pgdata:

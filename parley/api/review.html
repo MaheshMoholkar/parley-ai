@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review tasks</title>
+<style>
+  :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --card: #fff; --line: #e7e5e4;
+          --accent: #1d4ed8; --danger: #b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --card: #292524; --line: #44403c;
+            --accent: #93c5fd; --danger: #fca5a5; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 16px; margin-bottom: 12px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  pre { white-space: pre-wrap; font: inherit; background: var(--bg); border: 1px solid var(--line);
+        border-radius: 6px; padding: 10px; margin: 8px 0; }
+  input, textarea { width: 100%; box-sizing: border-box; font: inherit; color: inherit;
+                    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+                    padding: 8px; margin: 4px 0; }
+  textarea { min-height: 160px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--fg);
+           border-radius: 6px; padding: 6px 12px; margin: 8px 6px 0 0; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  button.danger { color: var(--danger); }
+  .error { color: var(--danger); white-space: pre-wrap; }
+  .row { display: flex; gap: 8px; align-items: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tasks waiting for a person</h1>
+  <div class="card">
+    <label for="key" class="meta">API key (kept in this browser tab only)</label>
+    <div class="row">
+      <input id="key" type="password" autocomplete="off" placeholder="pk_...">
+      <button class="primary" id="load">Load</button>
+    </div>
+    <div id="status" class="meta"></div>
+  </div>
+  <div id="tasks"></div>
+</main>
+<script>
+// All server text is inserted with textContent, never innerHTML, because task
+// summaries and messages can contain text that came from customers.
+const $ = (id) => document.getElementById(id);
+const keyInput = $("key");
+try { keyInput.value = sessionStorage.getItem("parley-key") || ""; } catch (e) {}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: { "Authorization": "Bearer " + keyInput.value, "Content-Type": "application/json" },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = Array.isArray(body.detail) ? body.detail.join("\n") : (body.detail || response.statusText);
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return body;
+}
+
+function el(tag, attrs = {}, text = "") {
+  const node = document.createElement(tag);
+  Object.assign(node, attrs);
+  if (text) node.textContent = text;
+  return node;
+}
+
+async function load() {
+  try { sessionStorage.setItem("parley-key", keyInput.value); } catch (e) {}
+  $("status").textContent = "Loading...";
+  $("tasks").replaceChildren();
+  try {
+    const page = await api("/v1/tasks?limit=200");
+    $("status").textContent = page.total + " open task(s)";
+    for (const task of page.items) $("tasks").append(await renderTask(task));
+  } catch (error) {
+    $("status").textContent = error.message;
+  }
+}
+
+async function renderTask(task) {
+  const card = el("div", { className: "card" });
+  const detail = await api("/v1/cases/" + task.case_id);
+  const invoice = detail.case.invoice;
+  card.append(el("div", { className: "meta" },
+    task.kind.replaceAll("_", " ") + " · " + detail.case.customer.name + " · invoice " + invoice.number));
+  card.append(el("p", {}, task.summary));
+  const error = el("div", { className: "error" });
+  const note = el("input", { placeholder: "Note (optional)" });
+
+  async function resolve(action, extra = {}) {
+    error.textContent = "";
+    try {
+      await api("/v1/tasks/" + task.id + "/resolve", {
+        method: "POST", body: JSON.stringify({ action, note: note.value, ...extra }),
+      });
+      card.remove();
+    } catch (e) { error.textContent = e.message; }
+  }
+
+  if (task.kind === "approve_send") {
+    const message = detail.messages.find((m) => m.id === task.message_id);
+    const subject = el("input", { value: message ? message.subject : "" });
+    const body = el("textarea", { value: message ? message.body : "" });
+    card.append(el("div", { className: "meta" }, "To: " + (message ? message.to_address : "")), subject, body, note);
+    card.append(
+      button("Approve", "primary", () => resolve("approve")),
+      button("Send edited", "", () => resolve("edit", { subject: subject.value, body: body.value })),
+      button("Reject", "danger", () => resolve("reject")),
+    );
+  } else {
+    const replies = detail.messages.filter((m) => m.direction === "inbound");
+    if (replies.length) card.append(el("pre", {}, replies[replies.length - 1].body));
+    card.append(note,
+      button("Resume chasing", "primary", () => resolve("resume")),
+      button("Close case", "danger", () => resolve("close")));
+  }
+  card.append(error);
+  return card;
+}
+
+function button(label, className, onClick) {
+  const node = el("button", { className }, label);
+  node.addEventListener("click", onClick);
+  return node;
+}
+
+$("load").addEventListener("click", load);
+if (keyInput.value) load();
+</script>
+</body>
+</html>

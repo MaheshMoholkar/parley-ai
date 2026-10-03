@@ -1,0 +1,131 @@
+[project]
+name = "parley"
+version = "0.1.0"
+description = "Collections agent: chases overdue invoices and hands a human only the cases that need judgement."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.13",
+    "anthropic[bedrock]>=1.11.0",
+    "aws-sdk-bedrock-runtime>=0.11.0",
+    "boto3>=1.43.107",
+    "fastapi>=0.115",
+    "httpx2>=2.13",
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "sqlalchemy>=2.0.30",
+    "tzdata>=2024.1",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.scripts]
+parley = "parley.cli:main"
+
+[dependency-groups]
+dev = [
+    "boto3-stubs[secretsmanager,sesv2]>=1.43.107",
+    "httpx2>=2.13",
+    "import-linter>=2.1",
+    "mypy>=1.11",
+    "pytest>=8.3",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["parley", "harness", "evalkit"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+packages = ["parley", "harness", "evalkit", "evals"]
+
+[[tool.mypy.overrides]]
+# The Bedrock streaming SDK ships without type information.
+module = ["aws_sdk_bedrock_runtime.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+# Architecture rules, checked in CI by `lint-imports`.
+[tool.importlinter]
+root_packages = ["parley", "harness", "evalkit", "evals"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "core is pure: no app layers, no I/O frameworks"
+type = "forbidden"
+source_modules = ["parley.core"]
+forbidden_modules = [
+    "parley.ports",
+    "parley.adapters",
+    "parley.db",
+    "parley.services",
+    "parley.api",
+    "sqlalchemy",
+    "fastapi",
+    "psycopg",
+]
+
+[[tool.importlinter.contracts]]
+name = "ports depend only on core"
+type = "forbidden"
+source_modules = ["parley.ports"]
+forbidden_modules = [
+    "parley.adapters",
+    "parley.db",
+    "parley.services",
+    "parley.api",
+    "sqlalchemy",
+    "fastapi",
+]
+
+[[tool.importlinter.contracts]]
+name = "adapters only translate: no database, services or API"
+type = "forbidden"
+source_modules = ["parley.adapters"]
+forbidden_modules = ["parley.db", "parley.services", "parley.api", "sqlalchemy", "fastapi"]
+
+[[tool.importlinter.contracts]]
+name = "services do not depend on the API"
+type = "forbidden"
+source_modules = ["parley.services", "parley.db"]
+forbidden_modules = ["parley.api", "fastapi"]
+
+[[tool.importlinter.contracts]]
+name = "model jobs only build prompts and call the model port"
+type = "forbidden"
+source_modules = ["parley.collections_ai"]
+forbidden_modules = [
+    "parley.adapters",
+    "parley.db",
+    "parley.services",
+    "parley.api",
+    "sqlalchemy",
+    "fastapi",
+]
+
+[[tool.importlinter.contracts]]
+name = "the agent harness is generic: it knows nothing about this project"
+type = "forbidden"
+source_modules = ["harness"]
+forbidden_modules = ["parley", "sqlalchemy", "fastapi", "anthropic"]
+
+[[tool.importlinter.contracts]]
+name = "the eval toolkit is generic: it knows nothing about this project"
+type = "forbidden"
+source_modules = ["evalkit"]
+forbidden_modules = ["parley", "harness", "evals", "sqlalchemy", "fastapi", "anthropic"]
