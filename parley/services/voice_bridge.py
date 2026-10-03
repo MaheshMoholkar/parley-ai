@@ -33,6 +33,7 @@ from parley.ports.voice import (
 )
 from parley.services.calls import CallStart, finish_call, record_turn, run_tool, start_call
 from parley.services.runtime import Runtime
+from parley.services.tracing import annotate, step
 
 log = logging.getLogger(__name__)
 
@@ -54,22 +55,26 @@ async def run_call(
         await leg.hang_up()
         return
 
-    reached = True
-    session: SpeechSession | None = None
-    try:
-        session = await rt.speech.start(start.system_prompt, VOICE_TOOLS, start.language)
-        bridge = _Bridge(rt, start, leg, session, rt.speech.input_rate, rt.speech.output_rate)
-        await asyncio.wait_for(bridge.run(end_grace), timeout=rt.voice_max_seconds)
-    except TimeoutError:
-        log.info("call %s reached its time limit", start.call_id)
-    except Exception:
-        log.exception("call %s failed", start.call_id)
-    finally:
-        if session is not None:
-            await session.close()
-        with suppress(Exception):
-            await leg.hang_up()
-        await asyncio.to_thread(finish_call, rt, token, reached)
+    with step("call", call_id=start.call_id, language=start.language) as span:
+        session: SpeechSession | None = None
+        try:
+            session = await rt.speech.start(start.system_prompt, VOICE_TOOLS, start.language)
+            bridge = _Bridge(rt, start, leg, session, rt.speech.input_rate, rt.speech.output_rate)
+            await asyncio.wait_for(bridge.run(end_grace), timeout=rt.voice_max_seconds)
+        except TimeoutError:
+            log.info("call %s reached its time limit", start.call_id)
+            annotate(span, ended_by="time_limit")
+        except Exception:
+            log.exception("call %s failed", start.call_id)
+            annotate(span, ended_by="error")
+        finally:
+            if session is not None:
+                await session.close()
+            with suppress(Exception):
+                await leg.hang_up()
+            # Someone answered and the audio connected, so the call reached them
+            # (an answering machine noticed by the agent is handled in finish_call).
+            await asyncio.to_thread(finish_call, rt, token, True)
 
 
 class _Bridge:

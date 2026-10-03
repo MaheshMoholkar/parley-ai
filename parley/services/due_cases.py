@@ -13,6 +13,7 @@ import uuid
 from collections import Counter
 from datetime import datetime, timedelta
 
+from opentelemetry import trace
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,6 +33,7 @@ from parley.db.models import Case, Customer, Message, MessageCase, Task, Tenant
 from parley.services.calls import VOICE, callable_number
 from parley.services.cases import apply_transition
 from parley.services.runtime import Runtime
+from parley.services.tracing import annotate, step
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +66,8 @@ def run_due_cases(rt: Runtime, tenant_id: uuid.UUID) -> int:
                 customer_id = customer.id
                 tenant = session.get_one(Tenant, tenant_id)
                 call_number = callable_number(rt, customer.phone)
-                _process_customer(session, tenant, customer, now, call_number)
+                with step("due_cases", tenant_id=tenant_id, customer_id=customer_id):
+                    _process_customer(session, tenant, customer, now, call_number)
         except Exception:
             # One customer's failure must not stop the others. The transaction
             # was rolled back, so nothing half-done was saved; the next run retries.
@@ -145,6 +148,11 @@ def _process_customer(
                 due_again.append(case)
         pending = due_again
 
+    annotate(
+        trace.get_current_span(),
+        case_ids=[case.id for case in due_cases],
+        reminded_case_ids=[case.id for case in to_remind],
+    )
     if to_remind:
         _queue_reminder(session, tenant, customer, to_remind, now, call_number)
 

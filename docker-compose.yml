@@ -1,6 +1,8 @@
 # Local development: Postgres, a one-off migration, the API and the worker.
 #   docker compose up --build
 # Put CSV files in ./data; containers see them under /data.
+# With traces, viewed in Jaeger at http://localhost:16686:
+#   PARLEY_TRACING=otlp docker compose --profile tracing up --build
 services:
   db:
     image: postgres:16
@@ -22,6 +24,8 @@ services:
     command: ["alembic", "upgrade", "head"]
     environment: &app-env
       PARLEY_DATABASE_URL: postgresql+psycopg://parley:parley@db:5432/parley
+      PARLEY_TRACING: ${PARLEY_TRACING:-off}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     depends_on:
       db: { condition: service_healthy }
 
@@ -40,6 +44,12 @@ services:
     volumes: ["./data:/data:ro"]
     depends_on:
       migrate: { condition: service_completed_successfully }
+
+  # Receives traces over OTLP and shows them. Only with --profile tracing.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    profiles: ["tracing"]
+    ports: ["16686:16686"]
 
 volumes:
   pgdata:

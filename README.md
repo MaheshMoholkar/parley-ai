@@ -226,6 +226,25 @@ would both lengthen it past the minimum and likely help accuracy, but it is a
 prompt change, so make it as a new prompt version and measure it with the evals.
 `cache_read_share` in the metrics shows the effect.
 
+## Tracing
+
+Every step the worker takes is one trace: a sync, one customer's due cases,
+drafting one message, delivering one, reading one reply, one investigation, one
+call, posting one webhook. Model calls are spans inside their step, with tokens
+and cost; the investigator's turns and tool calls, and a call's tool requests,
+are spans too. API requests are traced, and the work they do nests inside them.
+Spans carry the ids you see elsewhere (`parley.tenant_id`, `parley.case_ids`,
+`parley.message_id`, `parley.call_id`), and every log line shows its trace id.
+
+Tracing is off by default. Turn it on with `PARLEY_TRACING=otlp`; spans go over
+OTLP/HTTP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://localhost:4318`).
+
+- Locally: `PARLEY_TRACING=otlp docker compose --profile tracing up --build`,
+  then open Jaeger at http://localhost:16686.
+- On AWS: run the AWS Distro for OpenTelemetry collector beside the container
+  with [docker/otel-collector-aws.yaml](docker/otel-collector-aws.yaml); it
+  forwards traces to CloudWatch (X-Ray).
+
 ## Evals
 
 The evals measure the parts that depend on the model, on real model calls:
@@ -310,6 +329,7 @@ parley/
     events.py      record events pushed by the source system
     calls.py       phone calls: the agent's tools, finishing and auditing a call
     voice_bridge.py  carries a live call between the phone and the speech model
+    tracing.py     one span per step (OpenTelemetry)
     webhooks.py    the outbound events outbox and its delivery
     worker.py      the background loop that runs all of the above
   api/           HTTP endpoints (FastAPI) and the review screen (review.html)
@@ -322,6 +342,7 @@ tests/
     test_investigation.py        the M3 acceptance tests
     test_events.py               events in and webhooks out
     test_voice.py                calls end to end (the M7 acceptance test)
+    test_tracing.py              one trace per case step
   harness/       the agent loop on its own, with toy tools
   adapters/      each ERP adapter against a fake of that ERP's API, including
                  the walkthrough with the ERP as the source (the M6 acceptance test)

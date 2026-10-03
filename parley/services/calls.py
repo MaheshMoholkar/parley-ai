@@ -52,6 +52,7 @@ from parley.ports.voice import VoiceError
 from parley.services.cases import apply_transition, cases_of_message, invoice_line
 from parley.services.replies import Understood, replies_per_case
 from parley.services.runtime import Runtime
+from parley.services.tracing import annotate, step
 
 log = logging.getLogger(__name__)
 
@@ -208,7 +209,10 @@ def run_tool(
     """Run one tool the agent asked for and return what the agent is told.
     Every result has "ok"; a refused request says why, so the agent can tell
     the customer a colleague will follow up."""
-    with rt.session_factory.begin() as session:
+    with (
+        step("call_tool", call_id=call_id, tool=name) as span,
+        rt.session_factory.begin() as session,
+    ):
         call = session.get_one(Call, call_id, with_for_update=True)
         tool = _TOOLS.get(name)
         if tool is None:
@@ -226,6 +230,7 @@ def run_tool(
                 "ok": bool(result.get("ok")),
             },
         ]
+        annotate(span, ok=bool(result.get("ok")))
         return result
 
 

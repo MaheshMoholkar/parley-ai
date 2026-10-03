@@ -17,7 +17,7 @@ from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
 
-from parley.bootstrap import build_runtime, configure_logging
+from parley.bootstrap import build_runtime, configure_logging, configure_tracing
 from parley.config import Settings, get_settings
 from parley.services.runtime import Runtime
 from parley.services.sync import sync_tenant
@@ -68,6 +68,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     settings = get_settings()
     configure_logging(settings)
+    configure_tracing(settings, process=args.command)
     rt = build_runtime(settings)
     try:
         _run(args, rt, settings)

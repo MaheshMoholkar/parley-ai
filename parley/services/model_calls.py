@@ -1,5 +1,5 @@
 """Runs model jobs and logs every call (spec: "Every call is logged with prompt
-version, tokens, cost and latency")."""
+version, tokens, cost and latency"), as a row in model_calls and as a span."""
 
 import uuid
 from collections.abc import Callable
@@ -12,6 +12,7 @@ from parley.collections_ai.prompts import Prompt
 from parley.db.models import ModelCall
 from parley.ports.model import Completion, ModelError, Tier, TokenUsage
 from parley.services.runtime import Runtime
+from parley.services.tracing import annotate, step
 
 # Cache writes cost 1.25x the input price and cache reads 0.1x.
 CACHE_WRITE_FACTOR = 1.25
@@ -29,11 +30,27 @@ def run_job[T: BaseModel](
 ) -> Completion[T]:
     """Call `job` and record the call, whether it succeeds or raises ModelError."""
     now = rt.clock.now()
-    try:
-        completion, _ = job()
-    except ModelError as exc:
-        session.add(_row(tenant_id, message_id, prompt_version, tier, now, error=str(exc)))
-        raise
+    with step("model_call", prompt_version=prompt_version, tier=tier) as span:
+        try:
+            completion, _ = job()
+        except ModelError as exc:
+            session.add(_row(tenant_id, message_id, prompt_version, tier, now, error=str(exc)))
+            raise
+        cost = estimate_cost_micro_usd(rt, completion.model, completion.usage)
+        # OpenTelemetry's names for model calls, so trace tools can chart them.
+        span.set_attributes(
+            {
+                "gen_ai.operation.name": "chat",
+                "gen_ai.request.model": completion.model,
+                "gen_ai.usage.input_tokens": completion.usage.input_tokens,
+                "gen_ai.usage.output_tokens": completion.usage.output_tokens,
+            }
+        )
+        annotate(
+            span,
+            cache_read_tokens=completion.usage.cache_read_tokens,
+            cost_micro_usd=cost,
+        )
     session.add(
         _row(
             tenant_id,
@@ -44,7 +61,7 @@ def run_job[T: BaseModel](
             model=completion.model,
             usage=completion.usage,
             latency_ms=completion.latency_ms,
-            cost=estimate_cost_micro_usd(rt, completion.model, completion.usage),
+            cost=cost,
         )
     )
     return completion

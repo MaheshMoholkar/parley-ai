@@ -140,3 +140,20 @@ def test_model_failure_ends_the_run() -> None:
     result, _ = run([])  # the scripted session raises when the script is empty
     assert result.outcome == "model_error"
     assert result.steps[-1].kind == "error"
+
+
+def test_model_turns_and_tool_calls_are_spans() -> None:
+    from tests.tracing import collected_spans, named
+
+    exporter = collected_spans()
+    result, _ = run(
+        [
+            ToolCall("c1", "lookup", {"key": "a"}),
+            FinalAnswer("c2", {"value": 1, "evidence": ["a"]}),
+        ]
+    )
+    assert result.outcome == "final"
+    spans = exporter.get_finished_spans()
+    assert len(named(spans, "agent.model_turn")) == 2
+    [tool] = named(spans, "agent.tool")
+    assert tool.attributes == {"agent.tool": "lookup", "agent.tool_error": False}

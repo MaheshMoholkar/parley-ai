@@ -6,6 +6,10 @@
 
 Every step is recorded, so a run can be stored, replayed and scored. What to do
 with the final answer is the caller's job; the harness only checks its shape.
+
+Each model turn and each tool call is also an OpenTelemetry span (a no-op
+unless the application sets up tracing), nested in whatever span the caller
+has open.
 """
 
 import json
@@ -14,6 +18,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from opentelemetry import trace
 from pydantic import BaseModel, ValidationError
 
 from harness.model import (
@@ -29,6 +34,8 @@ from harness.model import (
 from harness.tools import Tool, ToolError
 
 Outcome = Literal["final", "step_limit", "time_limit", "model_error"]
+
+_tracer = trace.get_tracer("harness")
 
 NUDGE = "Reply with a tool call: use one of the tools, or call {final} to give your answer."
 
@@ -103,7 +110,16 @@ def run_agent[T: BaseModel](
         if monotonic() > deadline:
             return RunResult("time_limit", None, steps, session.model_id)
         try:
-            step = session.step(message)
+            with _tracer.start_as_current_span("agent.model_turn") as span:
+                step = session.step(message)
+                span.set_attributes(
+                    {
+                        "agent.step": number,
+                        "gen_ai.request.model": session.model_id,
+                        "gen_ai.usage.input_tokens": step.usage.input_tokens,
+                        "gen_ai.usage.output_tokens": step.usage.output_tokens,
+                    }
+                )
         except AgentModelError as exc:
             steps.append(StepRecord(number, "error", output=str(exc), is_error=True))
             return RunResult("model_error", None, steps, session.model_id, error=str(exc))
@@ -126,7 +142,9 @@ def run_agent[T: BaseModel](
                 return RunResult("final", final, steps, session.model_id)
 
             case ToolCall():
-                output, is_error = _run_tool(by_name.get(step.name), step.input, limits)
+                with _tracer.start_as_current_span("agent.tool") as span:
+                    output, is_error = _run_tool(by_name.get(step.name), step.input, limits)
+                    span.set_attributes({"agent.tool": step.name, "agent.tool_error": is_error})
                 steps.append(
                     StepRecord(
                         number, "tool_call", step.name, step.input, output, is_error, step.usage

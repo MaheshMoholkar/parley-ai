@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date
 from functools import partial
 
+from opentelemetry import trace
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -34,6 +35,7 @@ from parley.ports.model import ModelError, ModelPort
 from parley.services.cases import apply_transition, cases_of_message
 from parley.services.model_calls import run_job
 from parley.services.runtime import Runtime
+from parley.services.tracing import annotate, step
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +66,8 @@ def read_received_replies(rt: Runtime, tenant_id: uuid.UUID) -> int:
             if message is None:
                 return done
             tried.add(message.id)
-            _handle_reply(rt, session, message)
+            with step("read_reply", tenant_id=tenant_id, message_id=message.id):
+                _handle_reply(rt, session, message)
             done += 1
 
 
@@ -77,6 +80,7 @@ def _handle_reply(rt: Runtime, session: Session, message: Message) -> None:
     ]
 
     reply = _understand(rt, session, message, cases, now.astimezone(tenant.zone).date())
+    annotate(trace.get_current_span(), case_ids=[c.id for c in cases], intent=reply.intent)
     if reply.language:
         customer.language = reply.language
 

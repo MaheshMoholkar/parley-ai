@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from parley.core.domain import EventType, WebhookStatus
 from parley.db.models import OutboundEvent, Tenant
 from parley.services.runtime import Runtime
+from parley.services.tracing import annotate, step
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +90,16 @@ def deliver_webhooks(rt: Runtime, tenant_id: uuid.UUID) -> int:
             if event is None:
                 return delivered
             tenant = session.get_one(Tenant, tenant_id)
-            if not _post(rt, tenant, event, now):
+            with step(
+                "post_webhook",
+                tenant_id=tenant_id,
+                event_id=event.id,
+                event_type=event.type,
+                attempt=event.attempts + 1,
+            ) as span:
+                posted = _post(rt, tenant, event, now)
+                annotate(span, status=event.status, error=event.last_error)
+            if not posted:
                 return delivered
             delivered += 1
 
