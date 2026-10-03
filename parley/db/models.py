@@ -39,6 +39,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from parley.core.domain import (
     AgentRunStatus,
+    CallAudit,
+    CallStatus,
     CaseState,
     CloseReason,
     Direction,
@@ -113,6 +115,9 @@ class Tenant(Base):
     webhook_url: Mapped[str | None] = mapped_column(String(500))
     # Signs outbound events and verifies inbound ones (HMAC-SHA256).
     webhook_secret: Mapped[str] = mapped_column(String(64))
+    # A person's phone number that calls are handed to when a customer asks for
+    # one. None means the customer is told someone will call back.
+    voice_transfer_number: Mapped[str | None] = mapped_column(String(32))
     created_at: Mapped[datetime] = _created_at()
 
     @property
@@ -428,3 +433,35 @@ class OutboundEvent(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Call(Base):
+    """A phone call. The call is one outbound message on the "voice" channel (the
+    contact log entry); this row adds what only a call has: the provider's call
+    id, the transcript with the tools the agent used, and the audit result."""
+
+    __tablename__ = "calls"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = _tenant_fk()
+    message_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("messages.id"), unique=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("customers.id"), index=True)
+    # Random; links the provider's callbacks and audio stream to this call.
+    token: Mapped[str] = mapped_column(String(64), unique=True)
+    provider_call_id: Mapped[str | None] = mapped_column(String(100))
+    to_number: Mapped[str] = mapped_column(String(32))
+    # A test call from the browser page, not a reminder.
+    test: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[CallStatus] = mapped_column(_enum(CallStatus))
+    # "human", "machine_start", ... as the provider detected it.
+    answered_by: Mapped[str | None] = mapped_column(String(32))
+    # Set once the agent's confirm_identity tool succeeded; amounts are only
+    # given out after that.
+    identity_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The conversation in order: {"role", "text", "tool", "ok", "at"} per turn.
+    turns: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    audit: Mapped[CallAudit | None] = mapped_column(_enum(CallAudit))
+    audit_problems: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

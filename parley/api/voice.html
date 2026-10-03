@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test call</title>
+<style>
+  :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --card: #fff; --line: #e7e5e4;
+          --accent: #1d4ed8; --danger: #b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --card: #292524; --line: #44403c;
+            --accent: #93c5fd; --danger: #fca5a5; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 16px; margin-bottom: 12px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  input { width: 100%; box-sizing: border-box; font: inherit; color: inherit;
+          background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+          padding: 8px; margin: 4px 0 8px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--fg);
+           border-radius: 6px; padding: 6px 12px; margin: 8px 6px 0 0; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .line { margin: 6px 0; }
+  .line b { display: inline-block; min-width: 80px; color: var(--muted); font-weight: 500; }
+  .error { color: var(--danger); white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Test call</h1>
+  <p class="lead">Talk to the voice agent through your microphone, playing the customer of one
+    case. The call acts on the real case: a promise or dispute you make is recorded.</p>
+  <div class="card">
+    <label for="key" class="meta">API key (kept in this browser tab only)</label>
+    <input id="key" type="password" autocomplete="off" placeholder="pk_...">
+    <label for="case" class="meta">Case id</label>
+    <input id="case" autocomplete="off" placeholder="from GET /v1/cases">
+    <button class="primary" id="start">Start call</button>
+    <button id="stop" disabled>Hang up</button>
+    <div id="status" class="meta"></div>
+  </div>
+  <div class="card" id="transcript"><div class="meta">The transcript appears here.</div></div>
+</main>
+<script>
+// Server text goes in with textContent, never innerHTML: transcripts hold
+// whatever was said on the call.
+const $ = (id) => document.getElementById(id);
+try { $("key").value = sessionStorage.getItem("parley-key") || ""; } catch (e) {}
+
+let socket = null, audio = null, micStream = null, playAt = 0, playing = [];
+
+function status(text, error = false) {
+  $("status").textContent = text;
+  $("status").className = error ? "error" : "meta";
+}
+
+function addLine(role, text) {
+  const box = $("transcript");
+  if (box.querySelector(".meta")) box.textContent = "";
+  const line = document.createElement("div");
+  line.className = "line";
+  const who = document.createElement("b");
+  who.textContent = role;
+  line.append(who, document.createTextNode(text));
+  box.append(line);
+}
+
+// Microphone: capture at the browser's rate, downsample to 16 kHz 16-bit PCM.
+function toPcm16(samples, fromRate, toRate) {
+  const ratio = fromRate / toRate, out = new Int16Array(Math.floor(samples.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[Math.floor(i * ratio)]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out.buffer;
+}
+
+// Speaker: schedule each chunk right after the previous one.
+function play(buffer, rate) {
+  const pcm = new Int16Array(buffer), clip = audio.createBuffer(1, pcm.length, rate);
+  const data = clip.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) data[i] = pcm[i] / 0x8000;
+  const source = audio.createBufferSource();
+  source.buffer = clip;
+  source.connect(audio.destination);
+  playAt = Math.max(playAt, audio.currentTime);
+  source.start(playAt);
+  playAt += clip.duration;
+  playing.push(source);
+  source.onended = () => { playing = playing.filter((s) => s !== source); };
+}
+
+function clearPlayback() {
+  playing.forEach((s) => { try { s.stop(); } catch (e) {} });
+  playing = [];
+  playAt = audio ? audio.currentTime : 0;
+}
+
+async function start() {
+  const key = $("key").value.trim(), caseId = $("case").value.trim();
+  try { sessionStorage.setItem("parley-key", key); } catch (e) {}
+  status("Starting...");
+  const response = await fetch(`/v1/cases/${encodeURIComponent(caseId)}/test-call`, {
+    method: "POST", headers: { "Authorization": "Bearer " + key },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) { status(body.detail || `Error ${response.status}`, true); return; }
+
+  audio = new AudioContext();
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
+  const mic = audio.createMediaStreamSource(micStream);
+  const tap = audio.createScriptProcessor(4096, 1, 1);
+  let rates = null;
+
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  socket = new WebSocket(`${scheme}://${location.host}${body.websocket_path}`);
+  socket.binaryType = "arraybuffer";
+  socket.onmessage = (event) => {
+    if (typeof event.data !== "string") { if (rates) play(event.data, rates.out_rate); return; }
+    const message = JSON.parse(event.data);
+    if (message.type === "start") rates = message;
+    else if (message.type === "clear") clearPlayback();
+    else if (message.type === "transcript") addLine(message.role, message.text);
+    else if (message.type === "end") stop();
+  };
+  socket.onclose = () => stop();
+  tap.onaudioprocess = (event) => {
+    if (rates && socket.readyState === WebSocket.OPEN) {
+      socket.send(toPcm16(event.inputBuffer.getChannelData(0), audio.sampleRate, rates.in_rate));
+    }
+  };
+  mic.connect(tap);
+  tap.connect(audio.destination);
+  $("start").disabled = true;
+  $("stop").disabled = false;
+  status("On the call. Speak as the customer.");
+}
+
+function stop() {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "hang_up" }));
+    socket.close();
+  }
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  if (audio) audio.close();
+  socket = audio = micStream = null;
+  $("start").disabled = false;
+  $("stop").disabled = true;
+  status("Call ended.");
+}
+
+$("start").onclick = () => start().catch((e) => status(String(e), true));
+$("stop").onclick = stop;
+</script>
+</body>
+</html>

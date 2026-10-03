@@ -259,6 +259,40 @@ def on_delivery_failed(current: CaseView, reason: str) -> Transition | None:
     return _needs_human(TaskKind.ESCALATION, reason)
 
 
+# A call that reached nobody is tried again (as the next reminder) after this long.
+CALL_RETRY_DELAY = timedelta(days=1)
+
+
+def on_call_not_reached(current: CaseView, now: datetime) -> Transition | None:
+    """A reminder call was not answered, was busy, failed, or reached an answering
+    machine. The call still counts as a reminder (it was a contact attempt, so
+    the reminder limit keeps the number of attempts bounded), and the next one
+    is scheduled for tomorrow instead of after the usual gap."""
+    if current.state != CaseState.AWAITING_REPLY:
+        return None
+    return Transition(CaseState.SCHEDULED, next_action_at=now + CALL_RETRY_DELAY)
+
+
+def on_call_audit_failed(current: CaseView, problems: str) -> Transition | None:
+    """The transcript of a call on this case broke a voice rule. The case keeps
+    its place; a person reviews the call."""
+    if current.state == CaseState.CLOSED:
+        return None
+    return Transition(
+        current.state,
+        current.next_action_at,
+        task=TaskKind.REVIEW_CALL,
+        task_summary=f"A call broke a voice rule; please listen to it. {problems}",
+    )
+
+
+def on_transfer_requested(current: CaseView, reason: str) -> Transition | None:
+    """On a call, the customer asked to speak to a person."""
+    if current.state == CaseState.CLOSED:
+        return None
+    return _needs_human(TaskKind.ESCALATION, f"Customer asked for a person on a call: {reason}")
+
+
 # What a person is told for each finding of the investigator.
 FINDING_NOTES = {
     FindingResult.PAYMENT_FOUND: "A matching payment is in the books. Confirm it, then close.",

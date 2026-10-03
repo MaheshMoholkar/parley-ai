@@ -8,8 +8,9 @@ Each round, for each tenant:
 4. investigate paid claims and disputes;
 5. act on due cases (reminders, escalations, timeouts);
 6. draft queued reminders (model, checks, approval gate);
-7. deliver pending messages from the outbox;
-8. post pending events to the tenant's webhook.
+7. deliver pending messages from the outbox (emails are sent, calls dialled);
+8. close calls the phone provider never reported back on;
+9. post pending events to the tenant's webhook.
 
 Several worker processes can run at once; the row locks in each step keep them
 from doing the same work twice.
@@ -25,6 +26,7 @@ from types import FrameType
 from sqlalchemy import select
 
 from parley.db.models import Tenant
+from parley.services.calls import finish_stale_calls
 from parley.services.cases import open_overdue_cases
 from parley.services.delivery import deliver_pending_messages
 from parley.services.drafting import draft_queued_messages
@@ -77,6 +79,7 @@ def run_tenant_once(
     run_due_cases(rt, tenant_id)
     draft_queued_messages(rt, tenant_id)
     deliver_pending_messages(rt, tenant_id)
+    finish_stale_calls(rt, tenant_id)
     deliver_webhooks(rt, tenant_id)
 
 

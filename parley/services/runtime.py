@@ -15,6 +15,7 @@ from parley.ports.accounting import AccountingPort
 from parley.ports.channel import ChannelPort
 from parley.ports.clock import Clock
 from parley.ports.model import ModelPort
+from parley.ports.voice import CallPlacer, SpeechModel
 from parley.services.accounting import accounting_adapter_for
 
 
@@ -35,3 +36,10 @@ class Runtime:
     model_prices: Mapping[str, tuple[float, float]] = field(default_factory=dict)
     # Posts one webhook (url, body, headers) and returns the HTTP status.
     post_webhook: Callable[[str, bytes, dict[str, str]], int] = field(default=post_webhook)
+    # Phone calls: both None means the tenant's customers are never called.
+    voice: CallPlacer | None = None
+    speech: SpeechModel | None = None
+    # Numbers that may be called (E.164); "*" allows any. Demo deployments list
+    # only numbers whose owners agreed to be called.
+    voice_allowed_numbers: frozenset[str] = frozenset()
+    voice_max_seconds: int = 420

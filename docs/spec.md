@@ -89,10 +89,11 @@ The core keeps its own copy of customers, invoices and payments in one fixed sha
 | `message_case` | message\_id, case\_id, reminder\_number; unique (case\_id, reminder\_number) | Core |
 | `promise` | case\_id, amount, promised\_date, status (open, kept, broken), source contact | Core |
 | `dispute` | case\_id, reason, evidence ids, status | Core |
-| `task` | case\_id, kind (escalation, review\_reply, approve\_send, verify\_payment, review\_dispute), summary, status, resolution | Core |
+| `task` | case\_id, kind (escalation, review\_reply, approve\_send, verify\_payment, review\_dispute, review\_call), summary, status, resolution | Core |
 | `agent_run` | case\_id, steps, tokens, cost, outcome | Core |
 | `model_call` | job prompt version, tier, model, tokens, estimated cost, latency, ok or error | Core |
 | `unmatched_inbound` | sender, recipients, subject, body, reason (mail that matched no case) | Core |
+| `call` | message\_id, provider call id, status (placed, in progress, answered, not reached), answered by, identity confirmed, turns (transcript and tool calls in order), audit result | Core |
 | `inbound_event` | event id (unique per tenant), type, data, received\_at (events pushed by the source system) | Core |
 | `outbound_event` | type, data, status (pending, delivered, failed), attempts, next\_attempt\_at (the webhook outbox) | Core |
 
@@ -316,6 +317,17 @@ Both need sender registration in India, so they stay out of the first version. T
 - If an answering machine picks up, the agent ends the call and the workflow reschedules.
 - The transcript and tool calls are saved to `contact_log` and audited after the call.
 - Demo calls go only to your own number or to people who agreed.
+
+**As built (M7)**
+
+- A reminder becomes a call from the tenant's `call_from_reminder` setting on (off by default), when the customer has a phone number that may be called; a customer with no email is called from the first reminder. Calls go through the same outbox, approval gate, weekly cap and quiet hours as email, and quiet hours are checked again just before dialling.
+- `PARLEY_VOICE_ALLOWED_NUMBERS` lists the numbers that may be called (`*` for any); empty means none.
+- Two tools beyond the five above: `confirm_identity`, which `get_invoice`, `log_promise` and `log_dispute` require first (so amounts are withheld in code, not just by the prompt), and `end_call`. `log_dispute` with `already_paid` records a paid claim. The agent is told whether each tool call was accepted.
+- Twilio's answering-machine detection runs before the agent speaks; a machine, no answer, busy or failed call counts as a reminder attempt and the next one is due a day later (`on_call_not_reached`). `transfer_to_human` creates an escalation task and, if the tenant has a transfer number, hands the live call over.
+- The `contact_log` is the message row of the call (its body becomes the transcript) plus a `call` row with each turn and tool call in order, the provider's call id, and the audit result. The audit checks the AI disclosure in the first turn, no amount before a successful `confirm_identity`, no amount that is not owed (or promised on the call), and the banned phrases. A failure creates a `review_call` task and leaves the case where it is.
+- Browser microphone: `/voice` starts a test call about one case through `POST /v1/cases/{id}/test-call`. Test calls act on the real case.
+- Calls are capped at 7 minutes (Nova Sonic sessions last at most 8). Calls the provider never reported back on are closed by the worker after 15 minutes past the cap.
+- Not yet verified against live services: the Nova 2 Sonic voice ids, the cue that makes the agent speak first on an outbound call, and real Twilio audio. The protocol code is tested against fakes.
 
 ## Guardrails
 

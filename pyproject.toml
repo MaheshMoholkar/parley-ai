@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.13",
     "anthropic[bedrock]>=1.11.0",
+    "aws-sdk-bedrock-runtime>=0.11.0",
     "boto3>=1.43.107",
     "fastapi>=0.115",
     "httpx2>=2.13",
@@ -49,6 +50,11 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 strict = true
 plugins = ["pydantic.mypy"]
 packages = ["parley", "harness", "evalkit", "evals"]
+
+[[tool.mypy.overrides]]
+# The Bedrock streaming SDK ships without type information.
+module = ["aws_sdk_bedrock_runtime.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -50,6 +50,9 @@ class Policy(BaseModel):
     approval_mode: Literal["all", "above_threshold", "none"] = "all"
     approval_threshold: int | None = Field(default=None, ge=0)  # minor units
     tone_steps: tuple[str, ...] = Field(default=("friendly", "firm", "final"), min_length=1)
+    # From this reminder number on, a customer with a phone number is called
+    # instead of emailed. None (the default) means the tenant never calls.
+    call_from_reminder: int | None = Field(default=None, ge=1)
 
     def needs_approval(self, total_amount: int) -> bool:
         """Must a person approve this message before it is sent?"""
@@ -63,6 +66,10 @@ class Policy(BaseModel):
         """Reminder 1 uses the first tone, 2 the second, and so on; the last tone repeats."""
         index = min(max(reminder_number, 1), len(self.tone_steps)) - 1
         return self.tone_steps[index]
+
+    def prefers_call(self, reminder_number: int) -> bool:
+        """Should this reminder be a phone call rather than an email?"""
+        return self.call_from_reminder is not None and reminder_number >= self.call_from_reminder
 
 
 def next_time_outside_quiet_hours(moment: datetime, tz: ZoneInfo, quiet: QuietHours) -> datetime:

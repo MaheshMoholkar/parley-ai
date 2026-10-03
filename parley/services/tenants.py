@@ -1,4 +1,4 @@
-"""Creating tenants, their webhook settings, and finding a tenant from its API key."""
+"""Creating tenants, changing their settings, and finding a tenant from its API key."""
 
 import hashlib
 import secrets
@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from parley.core.phone import to_e164
 from parley.core.policy import Policy
 from parley.db.models import Tenant
 
@@ -61,6 +62,26 @@ def set_webhook_url(session: Session, tenant_id: uuid.UUID, url: str | None) -> 
     _check_webhook_url(url)
     tenant = session.get_one(Tenant, tenant_id, with_for_update=True)
     tenant.webhook_url = url
+    return tenant
+
+
+def update_policy(session: Session, tenant_id: uuid.UUID, changes: dict[str, Any]) -> Tenant:
+    """Change some policy settings (e.g. {"call_from_reminder": 3}); a value of
+    None goes back to the default. The result is validated before it is saved."""
+    tenant = session.get_one(Tenant, tenant_id, with_for_update=True)
+    overrides = {**tenant.policy_overrides, **changes}
+    overrides = {key: value for key, value in overrides.items() if value is not None}
+    Policy.model_validate(overrides)
+    tenant.policy_overrides = overrides
+    return tenant
+
+
+def set_transfer_number(session: Session, tenant_id: uuid.UUID, number: str | None) -> Tenant:
+    """The phone number calls are handed to when a customer asks for a person."""
+    if number is not None and to_e164(number) is None:
+        raise ValueError(f"not a phone number we can dial: {number!r}")
+    tenant = session.get_one(Tenant, tenant_id, with_for_update=True)
+    tenant.voice_transfer_number = to_e164(number)
     return tenant
 
 

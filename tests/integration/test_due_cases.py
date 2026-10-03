@@ -126,7 +126,8 @@ def test_customer_without_email_goes_to_a_human(rt: Runtime, tmp_path: Path) -> 
     assert case(rt, "A-1").state == CaseState.NEEDS_HUMAN
     with rt.session_factory() as session:
         task = session.scalars(select(Task)).one()
-        assert (task.kind, task.summary) == (TaskKind.ESCALATION, "Customer has no email address.")
+        assert task.kind == TaskKind.ESCALATION
+        assert task.summary == "Customer has no email address or phone number we may call."
 
 
 def test_reminder_limit_escalates(rt: Runtime, tmp_path: Path) -> None:
@@ -202,10 +203,10 @@ def test_one_failing_customer_does_not_block_the_others(
 
     original = due_cases._queue_reminder
 
-    def fail_for_asha(session, tenant, customer, cases, now):  # type: ignore[no-untyped-def]
+    def fail_for_asha(session, tenant, customer, cases, now, call_number):  # type: ignore[no-untyped-def]
         if customer.name == "Asha":
             raise RuntimeError("boom")
-        original(session, tenant, customer, cases, now)
+        original(session, tenant, customer, cases, now, call_number)
 
     monkeypatch.setattr(due_cases, "_queue_reminder", fail_for_asha)
     run_due_cases(rt, tenant_id)

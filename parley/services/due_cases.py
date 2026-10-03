@@ -29,6 +29,7 @@ from parley.core.messages import InvoiceLine, reminder_message
 from parley.core.policy import CONTACT_WINDOW, contact_allowed_at
 from parley.core.workflow import CannotContact, Contact, ContactLater, ContactNow, on_timer
 from parley.db.models import Case, Customer, Message, MessageCase, Task, Tenant
+from parley.services.calls import VOICE, callable_number
 from parley.services.cases import apply_transition
 from parley.services.runtime import Runtime
 
@@ -62,7 +63,8 @@ def run_due_cases(rt: Runtime, tenant_id: uuid.UUID) -> int:
                     break
                 customer_id = customer.id
                 tenant = session.get_one(Tenant, tenant_id)
-                _process_customer(session, tenant, customer, now)
+                call_number = callable_number(rt, customer.phone)
+                _process_customer(session, tenant, customer, now, call_number)
         except Exception:
             # One customer's failure must not stop the others. The transaction
             # was rolled back, so nothing half-done was saved; the next run retries.
@@ -109,7 +111,10 @@ def _lock_next_due_customer(
     return session.scalar(query)
 
 
-def _process_customer(session: Session, tenant: Tenant, customer: Customer, now: datetime) -> None:
+def _process_customer(
+    session: Session, tenant: Tenant, customer: Customer, now: datetime, call_number: str | None
+) -> None:
+    """`call_number` is the customer's number if they may be phoned, else None."""
     policy = tenant.policy
     due_cases = session.scalars(
         select(Case)
@@ -123,7 +128,7 @@ def _process_customer(session: Session, tenant: Tenant, customer: Customer, now:
         .with_for_update()
     ).all()
 
-    contact = _contact_decision(session, tenant, customer, now)
+    contact = _contact_decision(session, tenant, customer, now, call_number)
     to_remind: list[Case] = []
     pending = list(due_cases)
     # A case can become due again in the same pass: Awaiting reply times out to
@@ -141,15 +146,15 @@ def _process_customer(session: Session, tenant: Tenant, customer: Customer, now:
         pending = due_again
 
     if to_remind:
-        _queue_reminder(session, tenant, customer, to_remind, now)
+        _queue_reminder(session, tenant, customer, to_remind, now, call_number)
 
 
 def _contact_decision(
-    session: Session, tenant: Tenant, customer: Customer, now: datetime
+    session: Session, tenant: Tenant, customer: Customer, now: datetime, call_number: str | None
 ) -> Contact:
     """May this customer be sent a message right now?"""
-    if not customer.email:
-        return CannotContact("Customer has no email address.")
+    if not customer.email and call_number is None:
+        return CannotContact("Customer has no email address or phone number we may call.")
     if _is_on_hold(session, customer) or _has_unsent_message(session, customer):
         return ContactLater(now + HOLD_RECHECK)
 
@@ -195,17 +200,29 @@ def _is_on_hold(session: Session, customer: Customer) -> bool:
 
 
 def _queue_reminder(
-    session: Session, tenant: Tenant, customer: Customer, cases: list[Case], now: datetime
+    session: Session,
+    tenant: Tenant,
+    customer: Customer,
+    cases: list[Case],
+    now: datetime,
+    call_number: str | None,
 ) -> None:
     """Queue one outbound message covering all `cases`, in status `drafting`.
 
     The fixed template is written now as a safe fallback. The drafting step then
     replaces it with a model draft (if a model is configured) and decides whether
     a person must approve it; delivery sends it after that. Keeping model calls
-    out of this transaction means the customer lock is held only briefly."""
-    assert customer.email is not None  # checked by _contact_decision
+    out of this transaction means the customer lock is held only briefly.
+
+    From the tenant's `call_from_reminder` on, the reminder is a phone call when
+    the customer may be called (or always, if there is no email address). The
+    text then serves as the call's brief on the review screen."""
     for case in cases:
         case.reminders_sent += 1
+    reminder_number = max(case.reminders_sent for case in cases)
+    call = call_number is not None and (
+        tenant.policy.prefers_call(reminder_number) or not customer.email
+    )
 
     lines = [
         InvoiceLine(
@@ -217,16 +234,20 @@ def _queue_reminder(
         )
         for case in cases
     ]
-    tone = tenant.policy.tone_for(max(case.reminders_sent for case in cases))
+    tone = tenant.policy.tone_for(reminder_number)
     subject, body = reminder_message(customer.name, tenant.name, lines, tone)
+    if call:
+        subject = f"Call: {subject}"
+    address = call_number if call else customer.email
+    assert address is not None  # _contact_decision checked there is a way to reach them
 
     message = Message(
         id=uuid.uuid4(),
         tenant_id=tenant.id,
         customer_id=customer.id,
-        channel="email",
+        channel=VOICE if call else "email",
         direction=Direction.OUTBOUND,
-        to_address=customer.email,
+        to_address=address,
         subject=subject,
         body=body,
         status=MessageStatus.DRAFTING,

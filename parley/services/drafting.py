@@ -31,6 +31,7 @@ from parley.core.messages import InvoiceLine
 from parley.core.money import format_money
 from parley.db.models import Customer, Message, MessageCase, Task, Tenant
 from parley.ports.model import ModelError, ModelPort
+from parley.services.calls import VOICE
 from parley.services.cases import cases_of_message, invoice_line, record_amounts
 from parley.services.model_calls import run_job
 from parley.services.runtime import Runtime
@@ -96,7 +97,9 @@ def _draft_message(rt: Runtime, session: Session, message: Message) -> None:
     )
     tone = tenant.policy.tone_for(reminder_number)
 
-    if rt.model is None:
+    if rt.model is None or message.channel == VOICE:
+        # A call's text is only the brief a reviewer sees; the call itself is
+        # spoken by the voice agent.
         draft = _Draft(message.subject, message.body, None, [])
         failed_checks = False
     else:
@@ -129,7 +132,8 @@ def _draft_message(rt: Runtime, session: Session, message: Message) -> None:
         )
         _ask_for_approval(session, message, cases[0].id, summary, rt)
     elif tenant.policy.needs_approval(total):
-        summary = f"Approve reminder to {customer.name}: {_describe(lines)}."
+        kind = "call" if message.channel == VOICE else "reminder"
+        summary = f"Approve {kind} to {customer.name}: {_describe(lines)}."
         _ask_for_approval(session, message, cases[0].id, summary, rt)
     else:
         message.status = MessageStatus.PENDING

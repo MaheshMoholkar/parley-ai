@@ -3,7 +3,7 @@
 A collections agent: it chases overdue invoices for a business and hands a human
 only the cases that need judgement. The full design is in [docs/spec.md](docs/spec.md).
 
-**Status: milestones M1 to M6.** The service syncs invoices from a CSV aging
+**Status: all seven milestones (M1 to M7).** The service syncs invoices from a CSV aging
 report or an ERP, runs each overdue invoice through the case state machine, drafts
 reminders with Claude (on Amazon Bedrock) and checks every draft in code, sends
 email through Amazon SES, reads customer replies, and records promises and
@@ -13,7 +13,10 @@ finding backed by record ids. A person approves drafts and takes over unclear
 cases on a small review screen. An eval suite measures the model's work and
 gates changes in CI. `GET /v1/metrics` reports collection results and model cost per case.
 The source system can push change events, and every step of a case is posted
-to the tenant's webhook. Next: M7 (voice).
+to the tenant's webhook. From a reminder number the tenant chooses, the agent
+phones the customer instead (Amazon Nova 2 Sonic through Twilio), in Hindi or
+English, and a promise made on the call goes through the same checks as one
+made by email.
 
 By default it runs with no model and no email provider: reminders use a fixed
 template and are recorded instead of sent. See "Turning on the model and email".
@@ -134,6 +137,58 @@ is retried after 1, 2, 4 ... minutes (at most 6 hours apart) and given up after
 10 attempts. Delivery is at least once, and a retried event can arrive after a
 newer one.
 
+## Phone calls
+
+Calls are off until you turn them on. Two parts:
+
+| Variable | Meaning |
+| --- | --- |
+| `PARLEY_SPEECH_PROVIDER=nova_sonic` | The agent can talk: Amazon Nova 2 Sonic on Bedrock (`PARLEY_AWS_REGION`). Needed for both kinds of call below. |
+| `PARLEY_VOICE_IDS` | Nova Sonic voice per language, as JSON, e.g. `{"en": "kiara", "hi": "kiara"}`. Check the ids against the Nova 2 Sonic voice list. |
+| `PARLEY_VOICE=twilio` | Place reminder calls through Twilio. |
+| `PARLEY_PUBLIC_URL` | This service's public `https://` address; Twilio calls it back. |
+| `PARLEY_TWILIO_ACCOUNT_SID`, `PARLEY_TWILIO_AUTH_TOKEN`, `PARLEY_TWILIO_FROM_NUMBER` | The Twilio account and the number calls come from. |
+| `PARLEY_VOICE_ALLOWED_NUMBERS` | Comma-separated numbers that may be called, or `*` for any. Empty means no one: demo calls go only to people who agreed. |
+
+**Try it in the browser first.** With only the speech provider set, open
+`http://localhost:8000/voice`, enter the API key and a case id, and talk to the
+agent as if you were that customer. The call acts on the real case: a promise
+you make is recorded.
+
+**Reminder calls.** Choose the reminder from which customers are called, and
+optionally a person's number for transfers:
+
+```bash
+uv run parley set-policy --tenant-id <id> '{"call_from_reminder": 3}'
+uv run parley set-transfer-number --tenant-id <id> --number "+91 98xxxxxxxx"
+```
+
+From then on, a reminder at or after that number is a call when the customer
+has a phone number that may be called (and always, if they have no email). Like
+an email it waits for approval if the approval mode asks for it, and it is
+dialled only outside quiet hours.
+
+**What happens on a call.**
+
+1. Twilio rings the customer. An answering machine gets no message: the call
+   counts as an attempt and the next one is due the next day.
+2. The agent says it is an AI assistant calling for the business, and asks to
+   speak to the customer. It cannot see any amount until it calls
+   `confirm_identity`, then `get_invoice`.
+3. It can use `log_promise`, `log_dispute`, `send_payment_link`,
+   `transfer_to_human` and `end_call`, and nothing else. A promise or dispute
+   goes through the same code checks and state machine as an email reply, and
+   the agent is told whether it was recorded. When the customer talks over
+   the agent, audio not yet played is dropped.
+4. Afterwards the transcript and every tool call are saved (the `calls` table,
+   and as text in the message body), and audited in code: the AI disclosure in
+   the first turn, no amount before the identity check, no amount that is not
+   owed, no banned phrase. A call that fails the audit becomes a `review_call`
+   task for a person.
+
+Calls are limited to 7 minutes. Nova Sonic speaks Hindi and English but not
+Marathi, so Marathi speakers are called in Hindi.
+
 To run everything in containers, use `docker compose up --build`. Put CSV files in
 `./data`, and pass `/data/<file>.csv` as the path when you create the tenant.
 
@@ -222,19 +277,24 @@ parley/
     checks.py      the checks every draft must pass before it is sent
     money.py       amounts as whole paise
     messages.py    the fixed reminder template (fallback when drafts fail)
+    voice.py       the audit every call transcript gets afterwards
+    phone.py       phone numbers in the form telephony providers need
   collections_ai/ the model jobs and their versioned prompts (prompts/*.md)
   ports/         interfaces the core needs from the outside world
     accounting.py  read invoices, customers and payments from a source system
     channel.py     send a message; the shape of an inbound reply
     clock.py       tell the time (faked in tests)
     model.py       call a model and get typed output back
+    voice.py       place calls, talk to a speech model, the caller's audio
   adapters/      implementations of the ports
     accounting/    one folder per source system: csv/ reads an aging report,
                    the others call an ERP's API (found by scanning the folder)
     secrets.py     resolves "env:" and "aws:" secret references
     webhook_http.py  posts one outbound webhook
     channels/      dry run, SES sending, inbound email parsing
-    models/        Claude on Bedrock (single calls and agent sessions), a fake
+      voice/       Twilio calls and media streams, the browser test leg, audio formats
+    models/        Claude on Bedrock (single calls and agent sessions), Nova 2
+                   Sonic for calls, a fake
     clock.py       real clock and fake clock
   db/            tables (models.py), connections, migrations
   services/      use cases that load data, call the core and save results
@@ -248,6 +308,8 @@ parley/
     tasks.py       a person approving, editing, rejecting, resuming, closing
     delivery.py    send pending messages from the outbox
     events.py      record events pushed by the source system
+    calls.py       phone calls: the agent's tools, finishing and auditing a call
+    voice_bridge.py  carries a live call between the phone and the speech model
     webhooks.py    the outbound events outbox and its delivery
     worker.py      the background loop that runs all of the above
   api/           HTTP endpoints (FastAPI) and the review screen (review.html)
@@ -259,6 +321,7 @@ tests/
     test_walkthrough.py          the M2 acceptance test
     test_investigation.py        the M3 acceptance tests
     test_events.py               events in and webhooks out
+    test_voice.py                calls end to end (the M7 acceptance test)
   harness/       the agent loop on its own, with toy tools
   adapters/      each ERP adapter against a fake of that ERP's API, including
                  the walkthrough with the ERP as the source (the M6 acceptance test)

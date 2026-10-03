@@ -59,8 +59,8 @@ def check_draft(subject: str, body: str, lines: Sequence[InvoiceLine]) -> list[s
     if not subject.strip() or not body.strip():
         problems.append("subject or body is empty")
 
-    for match in _BANNED.finditer(text):
-        problems.append(f"banned phrase: {match.group(0)!r}")
+    for phrase in find_banned_phrases(text):
+        problems.append(f"banned phrase: {phrase!r}")
 
     problems += _check_amounts(text, lines)
     problems += _check_dates(text, lines)
@@ -68,6 +68,10 @@ def check_draft(subject: str, body: str, lines: Sequence[InvoiceLine]) -> list[s
         if line.number not in text:
             problems.append(f"invoice number {line.number} is missing")
     return problems
+
+
+def find_banned_phrases(text: str) -> list[str]:
+    return [match.group(0) for match in _BANNED.finditer(text)]
 
 
 def _check_amounts(text: str, lines: Sequence[InvoiceLine]) -> list[str]:

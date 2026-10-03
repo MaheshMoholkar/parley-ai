@@ -14,8 +14,10 @@ from sqlalchemy.orm import Session
 
 from parley.core.domain import Direction, EventType, MessageStatus
 from parley.core.workflow import on_delivery_failed
-from parley.db.models import Case, Message, MessageCase
+from parley.db.models import Case, Message, MessageCase, Tenant
 from parley.ports.channel import OutboundMessage
+from parley.ports.voice import VoiceError
+from parley.services.calls import VOICE, place_reminder_call
 from parley.services.cases import apply_transition, cases_of_message
 from parley.services.runtime import Runtime
 from parley.services.webhooks import emit
@@ -61,23 +63,30 @@ def _lock_next_pending(
 
 def _deliver(rt: Runtime, session: Session, message: Message) -> bool:
     now = rt.clock.now()
+    if message.channel == VOICE and _quiet_now(session, message, now):
+        return False  # a call waits for allowed hours, however long approval took
     message.attempts += 1
     try:
-        provider_id = rt.channel.send(
-            OutboundMessage(
-                idempotency_key=message.idempotency_key,
-                to_address=message.to_address,
-                subject=message.subject,
-                body=message.body,
-                reply_token=message.reply_token,
+        if message.channel == VOICE:
+            provider_id = place_reminder_call(rt, session, message).provider_call_id
+        else:
+            provider_id = rt.channel.send(
+                OutboundMessage(
+                    idempotency_key=message.idempotency_key,
+                    to_address=message.to_address,
+                    subject=message.subject,
+                    body=message.body,
+                    reply_token=message.reply_token,
+                )
             )
-        )
     except Exception as exc:
         log.warning(
             "send failed for message %s (attempt %d): %s", message.id, message.attempts, exc
         )
         message.last_error = str(exc)[:2000]
-        if message.attempts >= MAX_ATTEMPTS:
+        # A call that may already be ringing is never retried: a person decides.
+        unsafe_to_retry = isinstance(exc, VoiceError) and not exc.retryable
+        if unsafe_to_retry or message.attempts >= MAX_ATTEMPTS:
             _give_up(session, message, now)
         return False
 
@@ -93,6 +102,11 @@ def _deliver(rt: Runtime, session: Session, message: Message) -> bool:
     }
     emit(session, message.tenant_id, EventType.MESSAGE_SENT, data, now)
     return True
+
+
+def _quiet_now(session: Session, message: Message, now: datetime) -> bool:
+    tenant = session.get_one(Tenant, message.tenant_id)
+    return tenant.policy.quiet_hours.is_quiet(now.astimezone(tenant.zone))
 
 
 def _give_up(session: Session, message: Message, now: datetime) -> None:

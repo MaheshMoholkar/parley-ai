@@ -80,7 +80,7 @@ def _handle_reply(rt: Runtime, session: Session, message: Message) -> None:
     if reply.language:
         customer.language = reply.language
 
-    for case, case_reply in _replies_per_case(reply, cases):
+    for case, case_reply in replies_per_case(reply, cases):
         transition = on_reply(case.view(), case_reply, tenant.policy, now, tenant.zone)
         apply_transition(session, case, transition, now, source_message_id=message.id)
 
@@ -92,7 +92,7 @@ def _handle_reply(rt: Runtime, session: Session, message: Message) -> None:
 
 
 @dataclass(frozen=True)
-class _Understood:
+class Understood:
     """What a reply says, after code has checked the model's reading."""
 
     intent: ReplyIntent
@@ -105,15 +105,15 @@ class _Understood:
 
 def _understand(
     rt: Runtime, session: Session, message: Message, cases: list[Case], today: date
-) -> _Understood:
+) -> Understood:
     if rt.model is None:
-        return _Understood(ReplyIntent.OTHER, "No model configured; please read the reply.")
+        return Understood(ReplyIntent.OTHER, "No model configured; please read the reply.")
     numbers = [case.invoice.number for case in cases]
     reading = _read(rt, rt.model, session, message, numbers, today)
     if reading is None:
-        return _Understood(ReplyIntent.OTHER, "The reply could not be read automatically.")
+        return Understood(ReplyIntent.OTHER, "The reply could not be read automatically.")
     if reading.confidence < MIN_CONFIDENCE:
-        return _Understood(
+        return Understood(
             ReplyIntent.OTHER, f"Unclear reply: {reading.summary}", language=reading.language
         )
 
@@ -126,12 +126,12 @@ def _understand(
         try:
             amount = to_minor_units(reading.promised_amount, currency)
         except MoneyError:
-            return _Understood(
+            return Understood(
                 ReplyIntent.OTHER,
                 f"Promise with an unreadable amount: {reading.summary}",
                 language=reading.language,
             )
-    return _Understood(
+    return Understood(
         reading.intent,
         reading.summary,
         promised_date=reading.promised_date,
@@ -176,7 +176,7 @@ def _update_brief(
     session: Session,
     message: Message,
     customer: Customer,
-    reply: _Understood,
+    reply: Understood,
 ) -> None:
     """Refresh the customer brief. A failed or invalid update keeps the old brief:
     the brief is a convenience, never a reason to stop handling the reply."""
@@ -206,7 +206,7 @@ def _update_brief(
     customer.brief = new_brief
 
 
-def _replies_per_case(reply: _Understood, cases: list[Case]) -> list[tuple[Case, Reply]]:
+def replies_per_case(reply: Understood, cases: list[Case]) -> list[tuple[Case, Reply]]:
     """Decide which cases the reply is about, and what it says to each."""
     targets = [c for c in cases if c.invoice.number in reply.invoice_numbers] or cases
 
@@ -225,7 +225,7 @@ def _replies_per_case(reply: _Understood, cases: list[Case]) -> list[tuple[Case,
     return [(c, _reply(reply, amount=reply.promised_amount)) for c in targets]
 
 
-def _reply(reply: _Understood, amount: int | None) -> Reply:
+def _reply(reply: Understood, amount: int | None) -> Reply:
     return Reply(
         intent=reply.intent,
         promised_date=reply.promised_date,

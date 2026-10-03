@@ -40,6 +40,7 @@ class TaskKind(StrEnum):
     APPROVE_SEND = "approve_send"
     VERIFY_PAYMENT = "verify_payment"
     REVIEW_DISPUTE = "review_dispute"
+    REVIEW_CALL = "review_call"  # a call's transcript failed its audit
 
 
 class TaskStatus(StrEnum):
@@ -145,3 +146,18 @@ class SourceEventType(StrEnum):
     INVOICE_UPDATED = "invoice.updated"
     INVOICE_VOIDED = "invoice.voided"
     PAYMENT_RECORDED = "payment.recorded"
+
+
+class CallStatus(StrEnum):
+    """A phone call's progress. A call is one outbound message on the voice channel."""
+
+    PLACED = "placed"  # the telephony provider is dialling
+    IN_PROGRESS = "in_progress"  # someone answered and the agent is talking
+    ANSWERED = "answered"  # ended after a conversation
+    NOT_REACHED = "not_reached"  # no answer, busy, failed, or an answering machine
+
+
+# What the post-call audit can conclude.
+class CallAudit(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"

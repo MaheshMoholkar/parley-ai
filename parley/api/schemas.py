@@ -149,6 +149,12 @@ class EventOut(BaseModel):
     outcome: Literal["accepted", "duplicate"]
 
 
+class TestCallOut(BaseModel):
+    call_id: uuid.UUID
+    # Open a WebSocket to this path to talk (see the /voice page).
+    websocket_path: str
+
+
 class SyncOut(BaseModel):
     invoices_seen: int
     invoices_created: int
