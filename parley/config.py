@@ -3,11 +3,13 @@
 Example: PARLEY_DATABASE_URL=postgresql+psycopg://user:pass@host:5432/parley
 """
 
+import json
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from sqlalchemy import URL
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
@@ -19,6 +21,10 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "postgresql+psycopg://parley:parley@localhost:5432/parley"
+    # On AWS: the database secret RDS generates, as JSON ({"host", "port",
+    # "username", "password", "dbname"}), injected by ECS. When set, it decides
+    # database_url, so the password never appears in the task definition.
+    database_secret: str = ""
     # How often the worker pulls invoices from each tenant's source system.
     sync_interval_minutes: int = 60
     # How long the worker sleeps between rounds when there is nothing to do.
@@ -73,6 +79,20 @@ class Settings(BaseSettings):
     # demo calls go only to people who agreed.
     voice_allowed_numbers: Annotated[list[str], NoDecode] = []
     voice_max_seconds: int = 420
+
+    @model_validator(mode="after")
+    def _url_from_secret(self) -> "Settings":
+        if self.database_secret:
+            secret = json.loads(self.database_secret)
+            self.database_url = URL.create(
+                "postgresql+psycopg",
+                username=secret["username"],
+                password=secret["password"],
+                host=secret["host"],
+                port=int(secret.get("port", 5432)),
+                database=secret.get("dbname", "parley"),
+            ).render_as_string(hide_password=False)
+        return self
 
     @field_validator("voice_allowed_numbers", mode="before")
     @classmethod

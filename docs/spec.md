@@ -463,7 +463,7 @@ Each item below has an assumed answer that the rest of the spec uses; change any
 
 - [x] **Language and framework.** Decided: Python 3.12+, FastAPI, SQLAlchemy 2 (synchronous), Alembic and PostgreSQL.
 - [x] **Workflow engine.** Decided: a worker inside the service that reads due cases from PostgreSQL. This runs locally and in evals with no cloud dependency. The alternative is AWS Step Functions.
-- [ ] **Hosting.** Assumed: Docker Compose for development; one container (API plus worker) on ECS Fargate with RDS for the deployed demo.
+- [x] **Hosting.** Decided: Docker Compose for development; on AWS, one image run as two ECS Fargate services (API behind a load balancer, worker) plus a one-off migration task, with RDS PostgreSQL, described as a CDK app in `infra/`. CSV files are read from S3 (`s3://` paths).
 - [ ] **Approval mode at launch.** Assumed: `all`, so every outgoing message is approved by a human until the evals are in place.
 - [ ] **Payment link.** Assumed: one static link or UPI id per tenant in config. The alternative is a per-invoice link supplied by the accounting adapter.
 - [ ] **Telephony provider.** Assumed: Twilio.

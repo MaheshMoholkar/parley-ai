@@ -1,0 +1,9 @@
+{
+  "app": "uv run --group infra python -m infra.app",
+  "output": "infra/cdk.out",
+  "context": {
+    "parley": {
+      "model_provider": "template"
+    }
+  }
+}
