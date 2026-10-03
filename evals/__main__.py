@@ -4,6 +4,7 @@
     python -m evals run all --split test              # all four
     python -m evals gate                              # compare reports/ with the baseline
     python -m evals baseline                          # make the current reports the baseline
+    python -m evals compare-tiers --split test        # is the small model as good as the large?
 
 Reports go to reports/<eval>.json and .md. The evals call the real model, so
 they need PARLEY_MODEL_PROVIDER=bedrock and AWS access, and they cost money.
@@ -19,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from evalkit import Example, Rule, Scorer, check_gate, run_eval, split
+from evalkit import Example, Rule, Scorer, check_gate, compare, run_eval, split
 from evals import drafts, investigations, personas, replies
 from evals.sandbox import prepare_database
 from parley.adapters.models.bedrock import BedrockModel
@@ -133,6 +134,41 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return 0 if passed else 1
 
 
+TIER_METRICS = ["intent_correct", "date_correct", "amount_correct", "language_correct"]
+
+
+def cmd_compare_tiers(args: argparse.Namespace) -> int:
+    """Reply reading on the small model alone vs the large model alone (spec M5:
+    the small tier must match the large tier within the gate)."""
+    settings = get_settings()
+    model = _model(settings)
+    examples = split(replies.load(), args.split)
+    folder = REPORTS / "tiers"
+    folder.mkdir(parents=True, exist_ok=True)
+    reports = {}
+    for tier in ("small", "large"):
+        print(f"running replies on the {tier} model: {len(examples)} examples", flush=True)
+        report = run_eval(
+            f"replies ({tier})",
+            examples,
+            replies.make_task(model, tier),
+            replies.SCORERS,
+            replies.COUNT_METRICS,
+            args.workers,
+        )
+        (folder / f"replies_{tier}.json").write_text(report.to_json(), encoding="utf-8")
+        print(report.to_markdown())
+        reports[tier] = report
+    result = compare(
+        reports["small"].metrics(),
+        reports["large"].metrics(),
+        reports["large"].counts(),
+        TIER_METRICS,
+    )
+    print("\n".join(["# Small vs large", *result.lines]))
+    return 0 if result.passed else 1
+
+
 def cmd_baseline(_: argparse.Namespace) -> int:
     baseline = {}
     for path in sorted(REPORTS.glob("*.json")):
@@ -183,6 +219,10 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("baseline", help="record reports/ as the baseline").set_defaults(
         func=cmd_baseline
     )
+    tiers = commands.add_parser("compare-tiers", help="small vs large model on reply reading")
+    tiers.add_argument("--split", choices=("dev", "test", "all"), default="test")
+    tiers.add_argument("--workers", type=int, default=4)
+    tiers.set_defaults(func=cmd_compare_tiers)
 
     args = parser.parse_args(argv)
     result: int = args.func(args)

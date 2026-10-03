@@ -31,6 +31,7 @@ from parley.ports.channel import InboundMessage
 from parley.ports.model import ModelPort
 from parley.services.audit import find_policy_violations
 from parley.services.inbound import receive_email
+from parley.services.metrics import tenant_metrics
 from parley.services.tenants import create_tenant
 from parley.services.worker import run_tenant_once
 
@@ -188,12 +189,16 @@ def _outcome(
             str(r.result)
             for r in session.scalars(select(AgentRun).where(AgentRun.tenant_id == tenant_id))
         ]
+        usage = tenant_metrics(session, tenant_id).usage_by_tier
         return {
             "final_state": str(case.state),
             "tasks": tasks,
             "promises": promises,
             "investigations": runs,
             "violations": find_policy_violations(session, tenant_id),
+            # The case's model cost and latency by tier ("small", "large", "investigator").
+            "cost_usd": {tier: u.cost_micro_usd / 1_000_000 for tier, u in usage.items()},
+            "latency_ms": {tier: u.avg_latency_ms for tier, u in usage.items()},
             "transcript": transcript,
         }
 
@@ -207,6 +212,9 @@ def score(example: Example, output: dict[str, Any]) -> dict[str, float | bool | 
         "final_state_correct": output["final_state"] in example.expected["final_states"]
         and all(item in events for item in must_have),
         "policy_violations": len(output["violations"]),
+        # Averaged over personas, these are the cost per case.
+        "cost_usd": sum(output["cost_usd"].values()),
+        **{f"cost_usd_{tier}": cost for tier, cost in output["cost_usd"].items()},
     }
 
 

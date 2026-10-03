@@ -72,38 +72,43 @@ class EvalReport:
             default=str,
         )
 
+    def is_rate(self, name: str) -> bool:
+        """True for pass/fail metrics (shown as percentages); False for counts and
+        averaged values such as steps or cost."""
+        values = [r.scores[name] for r in self.results if name in r.scores]
+        return (
+            name not in self.count_metrics
+            and bool(values)
+            and all(isinstance(v, bool) for v in values)
+        )
+
+    def _shown(self, name: str, value: float) -> str:
+        return f"{value:.1%}" if self.is_rate(name) else f"{value:g}"
+
     def to_markdown(self) -> str:
         lines = [f"## {self.name} ({self.n} examples)", "", "| Metric | Value |", "| --- | --- |"]
         for name, value in self.metrics().items():
-            shown = (
-                f"{value:g}" if name in self.count_metrics or name == "errors" else f"{value:.1%}"
-            )
-            lines.append(f"| {name} | {shown} |")
+            lines.append(f"| {name} | {self._shown(name, value)} |")
         tags = sorted({t for r in self.results for t in r.tags})
         if tags:
+            keys = [k for k in self.metrics() if k != "errors"]
             lines += [
                 "",
-                "| Tag | n | " + " | ".join(k for k in self.metrics() if k != "errors") + " |",
+                "| Tag | n | " + " | ".join(keys) + " |",
+                "| --- " * (len(keys) + 2) + "|",
             ]
-            keys = [k for k in self.metrics() if k != "errors"]
-            lines.append("| --- " * (len(keys) + 2) + "|")
             for t in tags:
                 m = self.metrics(t)
                 n = sum(1 for r in self.results if t in r.tags)
-                cells = [
-                    f"{m.get(k, 0):g}" if k in self.count_metrics else f"{m.get(k, 0):.0%}"
-                    for k in keys
-                ]
+                cells = [self._shown(k, m.get(k, 0)) for k in keys]
                 lines.append(f"| {t} | {n} | " + " | ".join(cells) + " |")
+        # An example fails if it crashed or any of its pass/fail scores is False.
         failed = [
             r
             for r in self.results
-            if r.error
-            or not all(bool(v) for k, v in r.scores.items() if k not in self.count_metrics)
+            if r.error or not all(v for v in r.scores.values() if isinstance(v, bool))
         ]
         if failed:
-            lines += [
-                "",
-                f"Failing examples ({len(failed)}): " + ", ".join(r.id for r in failed[:40]),
-            ]
+            names = ", ".join(r.id for r in failed[:40])
+            lines += ["", f"Failing examples ({len(failed)}): {names}"]
         return "\n".join(lines) + "\n"

@@ -208,6 +208,11 @@ def _on_promise(
         )
     if not 0 < amount <= current.amount_due:
         return _needs_human(TaskKind.REVIEW_REPLY, "Promised amount is not within the amount due.")
+    if amount * 100 < current.amount_due * policy.min_promise_percent:
+        return _needs_human(
+            TaskKind.REVIEW_REPLY,
+            f"Promised amount is less than {policy.min_promise_percent}% of the amount due.",
+        )
 
     check_on = promised_date + timedelta(days=policy.promise_grace_days + 1)
     return Transition(

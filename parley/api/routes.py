@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import uuid
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -23,6 +24,7 @@ from parley.api.schemas import (
     CustomerOut,
     InboundOut,
     MessageOut,
+    MetricsOut,
     ResolveTaskIn,
     SyncOut,
     TaskOut,
@@ -33,6 +35,7 @@ from parley.db.models import Case, Message, MessageCase, Task
 from parley.services.accounting import AdapterConfigError
 from parley.services.cases import NotFoundError, set_case_paused, set_customer_paused
 from parley.services.inbound import receive_email
+from parley.services.metrics import tenant_metrics
 from parley.services.sync import SyncError, sync_tenant
 from parley.services.tasks import TaskError, resolve_task
 
@@ -138,6 +141,13 @@ def pause_customer(session: SessionDep, tenant: TenantDep, customer_id: uuid.UUI
 @router.post("/v1/customers/{customer_id}/resume")
 def resume_customer(session: SessionDep, tenant: TenantDep, customer_id: uuid.UUID) -> CustomerOut:
     return _set_customer_paused(session, tenant.id, customer_id, paused=False)
+
+
+@router.get("/v1/metrics")
+def metrics(session: SessionDep, tenant: TenantDep, since: datetime | None = None) -> MetricsOut:
+    """Cases by state, promises kept, days to collect, and model cost per case.
+    `since` limits it to cases opened (and model calls made) from that time."""
+    return MetricsOut.model_validate(asdict(tenant_metrics(session, tenant.id, since)))
 
 
 @router.get("/v1/tasks")

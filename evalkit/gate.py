@@ -33,6 +33,31 @@ def noise_margin(rate: float, n: int) -> float:
     return max(1.96 * math.sqrt(max(rate * (1 - rate), 0.0) / n), 1.0 / n)
 
 
+def compare(
+    candidate: dict[str, float],
+    reference: dict[str, float],
+    counts: dict[str, int],
+    metrics: list[str],
+) -> GateResult:
+    """Is `candidate` (e.g. a cheaper model) as good as `reference` on each metric,
+    within the noise margin of the reference's rate?"""
+    lines: list[str] = []
+    passed = True
+    for name in metrics:
+        if name not in candidate or name not in reference:
+            lines.append(f"FAIL {name}: missing from a run")
+            passed = False
+            continue
+        margin = noise_margin(reference[name], counts.get(name, 0))
+        ok = candidate[name] >= reference[name] - margin
+        lines.append(
+            f"{'ok  ' if ok else 'FAIL'} {name}: {candidate[name]:.1%} vs {reference[name]:.1%} "
+            f"(allowed gap {margin:.1%})"
+        )
+        passed &= ok
+    return GateResult(passed, lines)
+
+
 def check_gate(
     metrics: dict[str, float],
     counts: dict[str, int],

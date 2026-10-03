@@ -127,6 +127,7 @@ def test_promise_without_amount_means_the_full_amount() -> None:
         Reply(ReplyIntent.PROMISE, promised_date=date(2026, 3, 1)),  # beyond 30 days
         Reply(ReplyIntent.PROMISE, promised_date=date(2026, 1, 10), promised_amount=200_000),
         Reply(ReplyIntent.PROMISE, promised_date=date(2026, 1, 10), promised_amount=0),
+        Reply(ReplyIntent.PROMISE, promised_date=date(2026, 1, 10), promised_amount=100),  # 0.1%
     ],
 )
 def test_invalid_promise_goes_to_a_human(reply: Reply) -> None:

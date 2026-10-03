@@ -3,7 +3,7 @@
 A collections agent: it chases overdue invoices for a business and hands a human
 only the cases that need judgement. The full design is in [docs/spec.md](docs/spec.md).
 
-**Status: milestones M1 to M4.** The service syncs invoices from a CSV aging
+**Status: milestones M1 to M5.** The service syncs invoices from a CSV aging
 report, runs each overdue invoice through the case state machine, drafts
 reminders with Claude (on Amazon Bedrock) and checks every draft in code, sends
 email through Amazon SES, reads customer replies, and records promises and
@@ -11,7 +11,8 @@ disputes. When a customer says "we already paid" or disputes an invoice, an
 investigator agent checks the records with read-only tools and hands a person a
 finding backed by record ids. A person approves drafts and takes over unclear
 cases on a small review screen. An eval suite measures the model's work and
-gates changes in CI. Next: M5 (cost and routing, more guardrail tests).
+gates changes in CI. `GET /v1/metrics` reports collection results and model cost per case.
+Next: M6 (an ERP adapter) and M7 (voice).
 
 By default it runs with no model and no email provider: reminders use a fixed
 template and are recorded instead of sent. See "Turning on the model and email".
@@ -103,6 +104,23 @@ uv run pytest                     # unit + database tests (needs Postgres)
 The database tests use `PARLEY_TEST_DATABASE_URL`, which defaults to a
 `parley_test` database on localhost. Its contents are deleted on every run.
 
+## Metrics and cost
+
+`GET /v1/metrics` (optionally `?since=<time>`) returns cases by state, promises
+made, kept and broken, average days from due date to collection, and model
+spend: total, per case that used the model, by tier (small, large,
+investigator) with tokens and latency, and the share of input served from the
+prompt cache.
+
+**Prompt caching.** System prompts and the investigator's tool list are marked
+for caching, but Claude only caches a prefix of at least 512 tokens on the
+current models. Today only the investigator's prefix (prompt plus tool
+definitions) is that long; the single-call prompts are 200 to 470 tokens, so
+they are not cached yet. Adding worked examples to the reply-reading prompt
+would both lengthen it past the minimum and likely help accuracy, but it is a
+prompt change, so make it as a new prompt version and measure it with the evals.
+`cache_read_share` in the metrics shows the effect.
+
 ## Evals
 
 The evals measure the parts that depend on the model, on real model calls:
@@ -119,7 +137,12 @@ PARLEY_MODEL_PROVIDER=bedrock uv run python -m evals run replies --split dev   #
 PARLEY_MODEL_PROVIDER=bedrock uv run python -m evals run all --split test      # held-out score
 uv run python -m evals gate        # compare reports/ with evals/baseline.json
 uv run python -m evals baseline    # accept the current test-split reports as the baseline
+PARLEY_MODEL_PROVIDER=bedrock uv run python -m evals compare-tiers   # small vs large on replies
 ```
+
+`compare-tiers` reads every test reply with the small model alone and with the
+large model alone, and fails if the small one is worse by more than the noise
+margin; that is the check behind using the small model first in production.
 
 The gate has hard rules (no wrong-amount or banned-phrase drafts, no injection
 that changes a reading, no policy violations) and accuracy rules: a metric may

@@ -11,8 +11,9 @@ import re
 from datetime import date, timedelta
 from typing import Any
 
-from evalkit import Example, check_gate, run_eval
+from evalkit import Example, check_gate, compare, run_eval
 from evals import drafts, investigations, personas, replies
+from evals.__main__ import TIER_METRICS
 from harness import FinalAnswer, ToolCall
 from harness.model import Reply, ToolResult
 from harness.testing import ScriptedModel
@@ -219,3 +220,23 @@ def test_persona_eval_plays_out_whole_cases(session_factory: SessionFactory) -> 
     assert "review_dispute" in outputs["disputer"]["tasks"]
     assert report.metrics()["final_state_correct"] == 1.0
     assert report.metrics()["policy_violations"] == 0
+    # Cost per case is reported (zero here: the fake model has no prices).
+    assert report.metrics()["cost_usd"] == 0
+    assert set(outputs["prompt_payer"]["cost_usd"]) >= {"large", "small"}
+
+
+def test_small_tier_must_match_the_large_tier() -> None:
+    """compare-tiers: a small model that gets dates wrong fails against a good large one."""
+    good, sloppy = reply_oracle(), reply_oracle(break_dates=True)
+
+    def by_tier(call: FakeCall) -> ReplyReading:
+        model = sloppy if call.tier == "small" else good
+        return model.responder(call)  # type: ignore[return-value]
+
+    model = FakeModel(by_tier)
+    examples = [e for e in replies.load() if e.split == "test"]
+    small = run_eval("s", examples, replies.make_task(model, "small"), replies.SCORERS)
+    large = run_eval("l", examples, replies.make_task(model, "large"), replies.SCORERS)
+    result = compare(small.metrics(), large.metrics(), large.counts(), TIER_METRICS)
+    assert not result.passed
+    assert compare(large.metrics(), large.metrics(), large.counts(), TIER_METRICS).passed

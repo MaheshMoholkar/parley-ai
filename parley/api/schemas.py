@@ -104,6 +104,31 @@ class TaskPage(BaseModel):
     offset: int
 
 
+class TierUsageOut(BaseModel):
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cost_micro_usd: int
+    avg_latency_ms: float
+
+
+class MetricsOut(BaseModel):
+    cases_by_state: dict[str, int]
+    promises_made: int
+    promises_kept: int
+    promises_broken: int
+    promise_kept_rate: float | None
+    cases_collected: int
+    avg_days_to_collect: float | None
+    model_cost_micro_usd: int
+    cases_using_model: int
+    cost_per_case_micro_usd: float | None
+    cache_read_share: float | None
+    usage_by_tier: dict[str, TierUsageOut]
+
+
 class InboundOut(BaseModel):
     outcome: Literal["stored", "duplicate", "unmatched"]
     message_id: uuid.UUID | None = None

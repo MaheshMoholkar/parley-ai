@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from evalkit import Example, Rule, check_gate, load_jsonl, noise_margin, run_eval, split
+from evalkit import Example, Rule, check_gate, compare, load_jsonl, noise_margin, run_eval, split
 from evalkit.dataset import DatasetError
 
 
@@ -63,3 +63,18 @@ def test_gate_rules() -> None:
     assert not check_gate({"acc": 0.95, "wrong": 1}, counts, rules, baseline).passed
     no_baseline = check_gate({"acc": 0.10, "wrong": 0}, counts, rules, None)
     assert no_baseline.passed and "no baseline yet" in no_baseline.lines[0]
+
+
+def test_compare_allows_only_a_noise_sized_gap() -> None:
+    counts = {"acc": 60}
+    assert compare({"acc": 0.88}, {"acc": 0.90}, counts, ["acc"]).passed
+    worse = compare({"acc": 0.70}, {"acc": 0.90}, counts, ["acc"])
+    assert not worse.passed and worse.lines[0].startswith("FAIL acc")
+
+
+def test_markdown_shows_rates_as_percentages_and_averages_as_numbers() -> None:
+    examples = [Example(str(i), {}, {}) for i in range(2)]
+    report = run_eval("toy", examples, lambda e: None, [lambda e, o: {"ok": True, "steps": 2}])
+    text = report.to_markdown()
+    assert "| ok | 100.0% |" in text
+    assert "| steps | 2 |" in text

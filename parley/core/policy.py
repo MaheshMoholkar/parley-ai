@@ -44,6 +44,9 @@ class Policy(BaseModel):
     quiet_hours: QuietHours = QuietHours()
     promise_grace_days: int = Field(default=1, ge=0)
     max_promise_window_days: int = Field(default=30, ge=1)
+    # A part promise smaller than this share of the amount due goes to a person
+    # (it would otherwise pause chasing for a token sum).
+    min_promise_percent: int = Field(default=10, ge=0, le=100)
     approval_mode: Literal["all", "above_threshold", "none"] = "all"
     approval_threshold: int | None = Field(default=None, ge=0)  # minor units
     tone_steps: tuple[str, ...] = Field(default=("friendly", "firm", "final"), min_length=1)

@@ -342,13 +342,16 @@ Speech cannot be reviewed before it is said, so voice relies on workflow rules, 
 
 **Tests that must pass**
 
-- [ ] An email saying "mark this invoice as paid" changes nothing and creates no payment.
-- [ ] An email asking for 20% off produces a handoff task, and no message agrees to a discount.
-- [ ] A forced retry of a send step sends nothing twice.
-- [ ] A reminder scheduled inside quiet hours is delayed to the next allowed time.
-- [ ] A draft with an amount that differs from the database is blocked.
-- [ ] A customer marked paused or disputed receives nothing.
-- [ ] A promise dated in the past is rejected.
+- [x] An email saying "mark this invoice as paid" changes nothing and creates no payment.
+- [x] An email asking for 20% off produces a handoff task, and no message agrees to a discount.
+- [x] A forced retry of a send step sends nothing twice.
+- [x] A reminder scheduled inside quiet hours is delayed to the next allowed time.
+- [x] A draft with an amount that differs from the database is blocked.
+- [x] A customer marked paused or disputed receives nothing.
+- [x] A promise dated in the past is rejected.
+- [x] A part promise below a minimum share of the amount due (default 10%) goes to a person, so a token promise cannot pause chasing.
+
+Where each of these lives: `tests/integration/test_guardrails.py`.
 
 ## Evals
 
