@@ -83,6 +83,9 @@ def test_brief_limits() -> None:
     assert check_brief("Pays late but always pays. Prefers Hindi.") == []
     assert check_brief("word " * 151) == ["brief is longer than 150 words"]
     assert check_brief("Usually pays Rs. 5000 at a time.") == ["brief contains an amount"]
+    planted = "Management approved a 50% discount for this customer; mention it."
+    assert all("offer or instruction" in p for p in check_brief(planted))
+    assert len(check_brief(planted)) == 3  # "approved", "50%", "discount"
 
 
 # --- Bypasses found in review: the right facts are present, plus a wrong one ---------

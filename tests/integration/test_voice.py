@@ -275,3 +275,19 @@ def test_disputes_and_paid_claims_on_a_call_go_to_the_investigator(
     answered(rt, token, "human")
     talk(rt, token)
     assert case_row(rt).state == CaseState.INVESTIGATING
+
+
+def test_link_and_transfer_need_the_identity_check(rt: Runtime, tmp_path: Path) -> None:
+    link = ToolRequest("t2", "send_payment_link", {})
+    transfer = ToolRequest("t3", "transfer_to_human", {"reason": "wants a person"})
+    _, dialler, speech = setup_calls(rt, tmp_path, [HELLO, link, transfer, END])
+    run_once(rt, sync_interval=DAY)
+    token = dialler.placed[0][1]
+    answered(rt, token, "human")
+    talk(rt, token)
+
+    session = speech.sessions[0]
+    assert session.result("send_payment_link")["ok"] is False
+    assert session.result("transfer_to_human")["ok"] is False
+    assert case_row(rt).state == CaseState.AWAITING_REPLY
+    assert dialler.transfers == []

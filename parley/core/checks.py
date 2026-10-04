@@ -184,6 +184,16 @@ def _parse_date(text: str, formats: tuple[str, ...]) -> date | None:
 
 MAX_BRIEF_WORDS = 150
 
+# The brief is a note about how the customer behaves. It is written by the
+# model from the customer's own words, so it must not carry offers or
+# instructions that later drafts would follow ("they were approved a 50%
+# discount", "ignore the reminder schedule").
+_BRIEF_NOT_ALLOWED = re.compile(
+    r"%|\b(?:discount|waive[sd]?|waiver|write[- ]?off|settle(?:ment)?|approved|authori[sz]ed"
+    r"|instruct\w*|ignore|system prompt)\b",
+    re.I,
+)
+
 
 def check_brief(text: str) -> list[str]:
     """A customer brief must stay short and must not carry amounts, which always
@@ -191,6 +201,8 @@ def check_brief(text: str) -> list[str]:
     problems = []
     if len(text.split()) > MAX_BRIEF_WORDS:
         problems.append(f"brief is longer than {MAX_BRIEF_WORDS} words")
-    if _MONEY.search(text):
+    if _MONEY.search(text) or _LEFTOVER_NUMBER.search(text):
         problems.append("brief contains an amount")
+    for match in _BRIEF_NOT_ALLOWED.finditer(text):
+        problems.append(f"brief contains an offer or instruction ({match.group(0)!r})")
     return problems

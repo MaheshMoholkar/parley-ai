@@ -50,7 +50,7 @@ from parley.core.workflow import (
 from parley.db.models import Call, Case, Customer, Message, MessageCase, Promise, Tenant
 from parley.ports.voice import VoiceError
 from parley.services.cases import apply_transition, cases_of_message, invoice_line
-from parley.services.replies import Understood, replies_per_case
+from parley.services.replies import Understood, promise_currency, replies_per_case
 from parley.services.runtime import Runtime
 from parley.services.tracing import annotate, step
 
@@ -331,14 +331,17 @@ def _log_promise(ctx: _ToolContext, args: Mapping[str, Any]) -> dict[str, Any]:
         promised = date.fromisoformat(str(args["promised_date"]))
     except ValueError:
         return {"ok": False, "recorded": False, "error": "Ask for the date again."}
-    amount = None
-    if args.get("amount"):
-        try:
-            amount = to_minor_units(str(args["amount"]), cases[0].invoice.currency)
-        except MoneyError:
-            return {"ok": False, "recorded": False, "error": "Ask for the amount again."}
     known = {case.invoice.number for case in cases}
     named = frozenset(n for n in args.get("invoice_numbers") or [] if n in known)
+    amount = None
+    if args.get("amount"):
+        currency = promise_currency(cases, named)
+        if currency is None:
+            return {"ok": False, "recorded": False, "error": "Ask which invoice the amount is for."}
+        try:
+            amount = to_minor_units(str(args["amount"]), currency)
+        except MoneyError:
+            return {"ok": False, "recorded": False, "error": "Ask for the amount again."}
     problems = ctx.apply_reply(
         Understood(
             ReplyIntent.PROMISE,
@@ -371,6 +374,8 @@ def _log_dispute(ctx: _ToolContext, args: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _send_payment_link(ctx: _ToolContext, args: Mapping[str, Any]) -> dict[str, Any]:
+    if not ctx.call.identity_confirmed:
+        return IDENTITY_FIRST  # it would read out where the link goes
     tenant = ctx.tenant
     customer = ctx.session.get_one(Customer, ctx.call.customer_id)
     if not tenant.payment_link:
@@ -407,6 +412,9 @@ def _send_payment_link(ctx: _ToolContext, args: Mapping[str, Any]) -> dict[str, 
 
 
 def _transfer_to_human(ctx: _ToolContext, args: Mapping[str, Any]) -> dict[str, Any]:
+    if not ctx.call.identity_confirmed:
+        # Someone else answered: nothing is changed on the cases.
+        return {"ok": False, "say": "Say someone from the business will call back."}
     reason = str(args.get("reason", "")).strip()[:500]
     for case in ctx.open_cases():
         transition = on_transfer_requested(case.view(), reason)
@@ -513,10 +521,15 @@ def _finish(rt: Runtime, session: Session, call: Call, reached: bool) -> None:
     call.audit_problems = problems
     message = session.get_one(Message, call.message_id)
     message.body = transcript_text(call.turns)
-    if problems and cases:
-        transition = on_call_audit_failed(cases[0].view(), "; ".join(problems))
-        if transition is not None:
-            apply_transition(session, cases[0], transition, now)
+    open_cases = [case for case in cases if case.state != CaseState.CLOSED]
+    if problems:
+        # The review task goes on a case that is still open (the first one may
+        # have been paid meanwhile); if all are closed, the audit result stays
+        # on the call row for the record.
+        for case in open_cases[:1]:
+            transition = on_call_audit_failed(case.view(), "; ".join(problems))
+            if transition is not None:
+                apply_transition(session, case, transition, now)
 
 
 def transcript_text(turns: list[dict[str, Any]]) -> str:

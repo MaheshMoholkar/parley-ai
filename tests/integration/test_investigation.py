@@ -267,3 +267,21 @@ def test_outbound_messages_are_never_sent_by_the_investigator(rt: Runtime, tmp_p
         )
     assert after == before
     assert "Check the bank" in tasks(rt)[0].summary
+
+
+def test_a_payment_too_small_for_the_invoice_is_not_payment_found(
+    rt: Runtime, tmp_path: Path
+) -> None:
+    paid_claim(rt, tmp_path)
+    with rt.session_factory() as session:
+        old = str(
+            session.scalars(select(Payment.id).where(Payment.reference == "old payment")).one()
+        )
+    rt.agent_model = ScriptedModel(
+        [FinalAnswer("c1", {"result": "payment_found", "evidence_ids": [old], "summary": "Paid."})]
+    )
+
+    run_investigations(rt, asha_case(rt).tenant_id)
+
+    assert the_run(rt).result == FindingResult.UNCLEAR
+    assert "add up to less than the amount due" in tasks(rt)[0].summary

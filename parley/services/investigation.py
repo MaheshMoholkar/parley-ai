@@ -126,7 +126,7 @@ def _investigate(rt: Runtime, session: Session, run: AgentRun) -> None:
             limits=rt.agent_limits,
         )
         _record(rt, run, outcome)
-        result, summary = _checked_finding(session, run, customer, outcome)
+        result, summary = _checked_finding(session, run, customer, case, outcome)
 
     run.result = result
     run.status = AgentRunStatus.DONE
@@ -159,7 +159,7 @@ def _record(rt: Runtime, run: AgentRun, outcome: RunResult[Finding]) -> None:
 
 
 def _checked_finding(
-    session: Session, run: AgentRun, customer: Customer, outcome: RunResult[Finding]
+    session: Session, run: AgentRun, customer: Customer, case: Case, outcome: RunResult[Finding]
 ) -> tuple[FindingResult, str]:
     """Code's check of the model's finding. Anything that does not hold up
     becomes "unclear", with the reason, for a person to pick up."""
@@ -187,8 +187,44 @@ def _checked_finding(
             f"The investigator reported {finding.result} without citing a payment. "
             f"It said: {finding.summary}"
         )
+    if needs_payment:
+        problem = _payment_evidence_problem(session, case, finding)
+        if problem:
+            return FindingResult.UNCLEAR, (
+                f"The payments the investigator cited do not support {finding.result}: "
+                f"{problem}. It said: {finding.summary}"
+            )
     cited = "; ".join(text for _, text in evidence)
     return finding.result, f"{finding.summary} Evidence: {cited or 'none cited'}."
+
+
+# A payment made this long before the due date cannot be for this invoice.
+MAX_PAYMENT_LEAD = timedelta(days=120)
+
+
+def _payment_evidence_problem(session: Session, case: Case, finding: Finding) -> str:
+    """Check the cited payments can pay this invoice: same currency, not long
+    before it was due, and (for "payment found") enough to cover it. A person
+    still confirms; this only stops a misleading finding reaching them."""
+    ids = []
+    for raw in finding.evidence_ids:
+        try:
+            ids.append(uuid.UUID(raw))
+        except ValueError:
+            continue
+    payments = session.scalars(
+        select(Payment).where(Payment.id.in_(ids), Payment.customer_id == case.customer_id)
+    ).all()
+    invoice = case.invoice
+    for payment in payments:
+        if payment.currency != invoice.currency:
+            return f"a payment is in {payment.currency}, the invoice in {invoice.currency}"
+        if payment.paid_on < invoice.due_date - MAX_PAYMENT_LEAD:
+            return f"a payment of {payment.paid_on:%d %b %Y} is long before the invoice was due"
+    total = sum(payment.amount for payment in payments)
+    if finding.result == FindingResult.PAYMENT_FOUND and total < invoice.amount_due:
+        return "they add up to less than the amount due"
+    return ""
 
 
 def describe_evidence(

@@ -113,7 +113,10 @@ def _handle_reply(rt: Runtime, session: Session, message: Message) -> None:
         transition = on_reply(case.view(), case_reply, tenant.policy, now, tenant.zone)
         apply_transition(session, case, transition, now, source_message_id=message.id)
 
-    if rt.model is not None:
+    # The brief steers later drafts, so it is updated only from a reply that was
+    # read with confidence as one of the known intents; an unclear or
+    # unexpected reply (where injection attempts land) leaves it as it was.
+    if rt.model is not None and reply.intent != ReplyIntent.OTHER:
         _update_brief(rt, rt.model, session, message, customer, reply)
 
     message.status = MessageStatus.READ
@@ -142,16 +145,21 @@ def _understand(
     if reading is None:
         return Understood(ReplyIntent.OTHER, "The reply could not be read automatically.")
     if reading.confidence < MIN_CONFIDENCE:
-        return Understood(
-            ReplyIntent.OTHER, f"Unclear reply: {reading.summary}", language=reading.language
-        )
+        # An unsure reading changes nothing about the customer, language included.
+        return Understood(ReplyIntent.OTHER, f"Unclear reply: {reading.summary}")
 
     # Check the proposed fields against the cases; never trust them as given.
     known = set(numbers)
     named = frozenset(n for n in reading.invoice_numbers if n in known)
     amount = None
     if reading.promised_amount:
-        currency = cases[0].invoice.currency if cases else "INR"
+        currency = promise_currency(cases, named)
+        if currency is None:
+            return Understood(
+                ReplyIntent.OTHER,
+                f"Promise of an amount across invoices in different currencies: {reading.summary}",
+                language=reading.language,
+            )
         try:
             amount = to_minor_units(reading.promised_amount, currency)
         except MoneyError:
@@ -233,6 +241,14 @@ def _update_brief(
         log.warning("brief update for customer %s rejected: %s", customer.id, problems)
         return
     customer.brief = new_brief
+
+
+def promise_currency(cases: list[Case], named: frozenset[str]) -> str | None:
+    """The currency a promised amount is in: that of the invoices it is about.
+    None when those invoices are in different currencies (a person decides)."""
+    targets = [c for c in cases if c.invoice.number in named] or cases
+    currencies = {c.invoice.currency for c in targets}
+    return currencies.pop() if len(currencies) == 1 else None
 
 
 def replies_per_case(reply: Understood, cases: list[Case]) -> list[tuple[Case, Reply]]:

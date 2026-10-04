@@ -107,3 +107,16 @@ def test_a_failed_audit_asks_for_a_review_without_moving_the_case() -> None:
     assert transition is not None
     assert (transition.state, transition.task) == (CaseState.PROMISED, TaskKind.REVIEW_CALL)
     assert on_call_audit_failed(view(CaseState.CLOSED), "x") is None
+
+
+def test_the_audit_checks_amounts_in_every_currency_and_in_words() -> None:
+    usd = [InvoiceLine("U-1", 40000, "USD", date(2026, 1, 1))]
+    hello = Turn("agent", "Hi, I am an AI assistant calling for Acme. Is this Bob?")
+    confirmed = Turn("tool", "", tool="confirm_identity", ok=True)
+    wrong = Turn("agent", "You owe $999.00.")
+    right = Turn("agent", "You owe $400.00, that is 400 dollars.")
+    assert any("not owed" in p for p in audit_call([hello, confirmed, wrong], usd))
+    assert audit_call([hello, confirmed, right], usd) == []
+
+    in_words = Turn("agent", "Hello, I'm an AI assistant. You owe four thousand rupees.")
+    assert any("before the identity check" in p for p in audit_call([in_words], LINES))
