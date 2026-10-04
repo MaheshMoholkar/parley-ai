@@ -46,6 +46,8 @@ from infra.config import DeployConfig
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FORWARDER_DIR = Path(__file__).resolve().parent / "forwarder"
 OTEL_CONFIG = (REPO_ROOT / "docker" / "otel-collector-aws.yaml").read_text(encoding="utf-8")
+# The app's default limit on a call (PARLEY_VOICE_MAX_SECONDS).
+MAX_CALL_SECONDS = 420
 OTEL_IMAGE = "public.ecr.aws/aws-observability/aws-otel-collector:v0.43.1"
 
 
@@ -201,12 +203,18 @@ class ParleyStack(Stack):
                 log_driver=ecs.LogDrivers.aws_logs(stream_prefix="api", log_group=log_group),
             ),
             circuit_breaker=ecs.DeploymentCircuitBreaker(rollback=True),
-            # Start new tasks before stopping old ones, so a deploy never drops calls
-            # in progress or pauses the worker.
+            # Start new tasks before stopping old ones; with the deregistration
+            # delay below, calls in progress finish before their task stops.
             min_healthy_percent=100,
             max_healthy_percent=200,
         )
         api.target_group.configure_health_check(path="/healthz", healthy_http_codes="200")
+        # When a deploy replaces a task, the load balancer stops sending it new
+        # requests but lets open connections (a call's WebSocket) finish for this
+        # long before the task is stopped: longer than the longest call.
+        api.target_group.set_attribute(
+            "deregistration_delay.timeout_seconds", str(MAX_CALL_SECONDS + 60)
+        )
         self._add_collector(api.task_definition, log_group)
 
         worker_task = ecs.FargateTaskDefinition(
@@ -253,7 +261,7 @@ class ParleyStack(Stack):
 
         # --- Email -------------------------------------------------------------------------
         if config.email_from:
-            domain = config.email_from.split("@", 1)[1]
+            domain = config.email_from.partition("@")[2]  # checked in DeployConfig
             ses.EmailIdentity(self, "SenderDomain", identity=ses.Identity.domain(domain))
         if config.receive_email:
             self._receive_email(app_secret)

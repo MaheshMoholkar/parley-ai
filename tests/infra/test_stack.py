@@ -145,9 +145,28 @@ def test_inbound_mail_goes_through_s3_and_the_forwarder(full: Template, minimal:
             "reply_domain",
         ),
         ({"model_provider": "gpt"}, "model_provider"),
+        ({"email_from": "reminders@acme.in"}, "reply_domain"),
+        ({"email_from": "acme.in", "reply_domain": "r.acme.in"}, "must be an address"),
+        ("[1, 2]", "JSON object"),
         ({"surprise": 1}, "unknown"),
     ],
 )
-def test_bad_settings_are_refused(settings: dict[str, Any], problem: str) -> None:
+def test_bad_settings_are_refused(settings: dict[str, Any] | str, problem: str) -> None:
     with pytest.raises(ValueError, match=problem):
         DeployConfig.from_context(settings)
+
+
+def test_settings_can_be_given_as_json_on_the_command_line() -> None:
+    config = DeployConfig.from_context('{"model_provider": "bedrock", "api_count": 2}')
+    assert (config.model_provider, config.api_count) == ("bedrock", 2)
+
+
+def test_calls_in_progress_outlive_a_deploy(minimal: Template) -> None:
+    minimal.has_resource_properties(
+        "AWS::ElasticLoadBalancingV2::TargetGroup",
+        {
+            "TargetGroupAttributes": Match.array_with(
+                [{"Key": "deregistration_delay.timeout_seconds", "Value": "480"}]
+            )
+        },
+    )

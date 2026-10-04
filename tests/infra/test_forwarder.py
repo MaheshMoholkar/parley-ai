@@ -45,7 +45,18 @@ def test_each_stored_email_is_posted_signed(monkeypatch: pytest.MonkeyPatch) -> 
         return Response()
 
     monkeypatch.setattr(forwarder.urllib.request, "urlopen", urlopen)
-    event = {"Records": [{"s3": {"bucket": {"name": "inbox"}, "object": {"key": "mail/abc+1"}}}]}
+    event = {
+        "Records": [
+            {"s3": {"bucket": {"name": "inbox"}, "object": {"key": "mail/abc+1"}}},
+            # SES's own check that it may write to the bucket: skipped.
+            {
+                "s3": {
+                    "bucket": {"name": "inbox"},
+                    "object": {"key": "mail/AMAZON_SES_SETUP_NOTIFICATION"},
+                }
+            },
+        ]
+    }
 
     assert forwarder.handler(event, None) == {"forwarded": 1}
     [request] = sent

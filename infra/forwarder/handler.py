@@ -19,6 +19,9 @@ from urllib.parse import unquote_plus
 
 import boto3
 
+# SES writes this object once, to check it may write to the bucket.
+SES_SETUP_OBJECT = "AMAZON_SES_SETUP_NOTIFICATION"
+
 _secret: str | None = None
 
 
@@ -28,6 +31,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, int]:
     for record in event["Records"]:
         bucket = record["s3"]["bucket"]["name"]
         key = unquote_plus(record["s3"]["object"]["key"])
+        if key.endswith(SES_SETUP_OBJECT):
+            continue  # SES's test write when the rule is created; not an email
         raw = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         forward(raw, os.environ["INBOUND_URL"], inbound_secret())
         forwarded += 1

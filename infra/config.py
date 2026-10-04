@@ -5,6 +5,7 @@ Everything is optional except where noted: the smallest deployment runs the
 API and worker with the fixed reminder template, no email sending and no calls.
 """
 
+import json
 from dataclasses import dataclass, field, fields
 from typing import Any
 
@@ -24,8 +25,9 @@ class DeployConfig:
 
     # Sending email with SES from this address (its domain must be verified in SES).
     email_from: str = ""
-    # Receiving replies: SES stores mail for this domain in S3 and a Lambda
-    # posts it to the API. SES receives mail only in some regions.
+    # Replies go to reply+<token>@<reply_domain>; needed whenever email is sent.
+    # With receive_email, SES stores mail for this domain in S3 and a Lambda
+    # posts it to the API (SES receives mail only in some regions).
     reply_domain: str = ""
     receive_email: bool = False
 
@@ -44,8 +46,14 @@ class DeployConfig:
     keep_database: bool = True
 
     @classmethod
-    def from_context(cls, raw: dict[str, Any] | None) -> "DeployConfig":
+    def from_context(cls, raw: dict[str, Any] | str | None) -> "DeployConfig":
+        # From cdk.json the settings arrive as an object; from `-c parley='{...}'`
+        # on the command line, as a JSON string.
+        if isinstance(raw, str):
+            raw = json.loads(raw)
         raw = raw or {}
+        if not isinstance(raw, dict):
+            raise ValueError("the parley settings must be a JSON object")
         known = {f.name for f in fields(cls)}
         unknown = set(raw) - known
         if unknown:
@@ -65,5 +73,12 @@ class DeployConfig:
             raise ValueError(
                 "twilio and receive_email need certificate_arn and an https public_url"
             )
+        if self.email_from:
+            local, _, domain = self.email_from.partition("@")
+            if not local or "." not in domain:
+                raise ValueError(f"email_from must be an address, got {self.email_from!r}")
+            if not self.reply_domain:
+                # Otherwise replies would go to the app's placeholder domain and be lost.
+                raise ValueError("email_from needs reply_domain, where customers' replies go")
         if self.receive_email and not self.reply_domain:
             raise ValueError("receive_email needs reply_domain")
