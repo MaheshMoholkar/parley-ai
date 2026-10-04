@@ -32,7 +32,7 @@ from parley.core.money import format_money
 from parley.db.models import Customer, Message, MessageCase, Task, Tenant
 from parley.ports.model import ModelError, ModelPort
 from parley.services.calls import VOICE
-from parley.services.cases import cases_of_message, invoice_line, record_amounts
+from parley.services.cases import cases_of_message, invoice_line, record_amounts, trusted_text
 from parley.services.model_calls import run_job
 from parley.services.runtime import Runtime
 from parley.services.tracing import annotate, step
@@ -163,7 +163,12 @@ def _draft_with_model(
                 partial(draft_reminder, model, request),
             )
             subject, body = completion.output.subject.strip(), completion.output.body.strip()
-            problems = check_draft(subject, body, request.lines)
+            problems = check_draft(
+                subject,
+                body,
+                request.lines,
+                trusted_text(request.business_name, request.customer_name, request.payment_link),
+            )
             if not problems:
                 verdict = run_job(
                     rt,

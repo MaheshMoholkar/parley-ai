@@ -21,6 +21,7 @@ import logging
 import signal
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from types import FrameType
 
@@ -74,16 +75,28 @@ def run_tenant_once(
             # Keep working with the data from the last good sync.
             log.exception("sync failed for tenant %s", tenant_id)
 
-    with rt.session_factory.begin() as session:
-        open_overdue_cases(session, session.get_one(Tenant, tenant_id), now)
-    read_received_replies(rt, tenant_id)
-    run_investigations(rt, tenant_id)
-    run_due_cases(rt, tenant_id)
-    withdraw_stale_messages(rt, tenant_id)
-    draft_queued_messages(rt, tenant_id)
-    deliver_pending_messages(rt, tenant_id)
-    finish_stale_calls(rt, tenant_id)
-    deliver_webhooks(rt, tenant_id)
+    def open_cases(rt: Runtime, tenant_id: uuid.UUID) -> None:
+        with rt.session_factory.begin() as session:
+            open_overdue_cases(session, session.get_one(Tenant, tenant_id), now)
+
+    steps: list[Callable[[Runtime, uuid.UUID], object]] = [
+        open_cases,
+        read_received_replies,
+        run_investigations,
+        run_due_cases,
+        withdraw_stale_messages,
+        draft_queued_messages,
+        deliver_pending_messages,
+        finish_stale_calls,
+        deliver_webhooks,
+    ]
+    for step in steps:
+        # A step that fails is logged and retried next round; it must not stop
+        # the steps after it (a stuck reply must not stop reminders going out).
+        try:
+            step(rt, tenant_id)
+        except Exception:
+            log.exception("%s failed for tenant %s", step.__name__, tenant_id)
 
 
 def run_forever(rt: Runtime, sync_interval: timedelta, poll_seconds: float) -> None:

@@ -19,14 +19,14 @@ from collections import defaultdict
 from dataclasses import replace
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from parley.core.checks import check_draft
 from parley.core.domain import Direction, MessageStatus
 from parley.core.policy import CONTACT_WINDOW
 from parley.db.models import Case, Customer, Dispute, Message, MessageCase, Tenant
-from parley.services.cases import invoice_line
+from parley.services.cases import invoice_line, trusted_text
 
 
 def find_policy_violations(session: Session, tenant_id: uuid.UUID) -> list[str]:
@@ -40,18 +40,21 @@ def find_policy_violations(session: Session, tenant_id: uuid.UUID) -> list[str]:
                 Message.direction == Direction.OUTBOUND,
                 Message.status == MessageStatus.SENT,
             )
-            .order_by(Message.created_at)
+            .order_by(func.coalesce(Message.sent_at, Message.created_at))
         )
     )
     problems: list[str] = []
     by_customer: dict[uuid.UUID, list[datetime]] = defaultdict(list)
 
     for message in sent:
-        label = f"message {message.id} ({message.created_at.astimezone(tenant.zone):%d %b %H:%M})"
-        local = message.created_at.astimezone(tenant.zone)
+        # When the customer was contacted: sending can come well after queueing
+        # (approval, quiet hours).
+        when = message.sent_at or message.created_at
+        local = when.astimezone(tenant.zone)
+        label = f"message {message.id} ({local:%d %b %H:%M})"
         if policy.quiet_hours.is_quiet(local):
             problems.append(f"{label}: sent in quiet hours")
-        by_customer[message.customer_id].append(message.created_at)
+        by_customer[message.customer_id].append(when)
 
         rows = session.execute(
             select(Case, MessageCase.amount_due)
@@ -66,19 +69,21 @@ def find_policy_violations(session: Session, tenant_id: uuid.UUID) -> list[str]:
             else invoice_line(case.invoice)
             for case, amount in rows
         ]
-        for problem in check_draft(message.subject, message.body, lines):
+        customer = session.get_one(Customer, message.customer_id)
+        trusted = trusted_text(tenant.name, customer.name, tenant.payment_link)
+        for problem in check_draft(message.subject, message.body, lines, trusted):
             problems.append(f"{label}: {problem}")
         for case in cases:
-            if case.closed_at is not None and case.closed_at < message.created_at:
+            if case.closed_at is not None and case.closed_at < when:
                 problems.append(f"{label}: sent after case {case.invoice.number} was closed")
 
         disputes = session.scalars(
             select(Dispute)
             .join(Case, Case.id == Dispute.case_id)
-            .where(Case.customer_id == message.customer_id, Dispute.created_at < message.created_at)
+            .where(Case.customer_id == message.customer_id, Dispute.created_at < when)
         )
         for dispute in disputes:
-            if dispute.resolved_at is None or dispute.resolved_at > message.created_at:
+            if dispute.resolved_at is None or dispute.resolved_at > when:
                 problems.append(f"{label}: sent while the customer had an open dispute")
                 break
 

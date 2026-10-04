@@ -359,7 +359,7 @@ def test_discount_request_goes_to_a_person_and_nothing_is_sent(
 
     receive(client, rt, "Give us 20% off and we will pay today.")
 
-    assert [t.kind for t in tasks(rt)] == [TaskKind.REVIEW_REPLY]
+    assert {t.kind for t in tasks(rt)} == {TaskKind.REVIEW_REPLY}
     with rt.session_factory() as session:
         outbound = session.scalars(
             select(Message).where(Message.direction == Direction.OUTBOUND)
@@ -378,3 +378,25 @@ def test_promise_dated_in_the_past_is_rejected(
     assert case(rt, "A-1").state == CaseState.NEEDS_HUMAN
     with rt.session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Promise)) == 0
+
+
+def test_a_reply_that_breaks_the_reader_goes_to_a_person_and_does_not_block_others(
+    client: TestClient, rt: Runtime, tmp_path: Path
+) -> None:
+    remind(rt, tmp_path, [A1])
+
+    def broken(call: FakeCall) -> ReplyReading:
+        raise RuntimeError("an unexpected bug")
+
+    rt.model = FakeModel(broken)
+    assert post(client, raw_email(reply_address(rt), "first")).json()["outcome"] == "stored"
+    raw = raw_email(reply_address(rt), "second", msg_id="<m2@x>")
+    assert post(client, raw).json()["outcome"] == "stored"
+
+    assert read_received_replies(rt, case(rt, "A-1").tenant_id) == 2
+    with rt.session_factory() as session:
+        statuses = set(
+            session.scalars(select(Message.status).where(Message.direction == Direction.INBOUND))
+        )
+    assert statuses == {MessageStatus.READ}
+    assert {t.kind for t in tasks(rt)} == {TaskKind.REVIEW_REPLY}

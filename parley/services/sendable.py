@@ -30,12 +30,13 @@ from sqlalchemy.orm import Session
 from parley.core.checks import check_draft
 from parley.core.domain import UNSENT_STATUSES, CaseState, Direction, MessageStatus, TaskStatus
 from parley.core.workflow import on_reminder_withdrawn
-from parley.db.models import Customer, Message, MessageCase, Task
+from parley.db.models import Customer, Message, MessageCase, Task, Tenant
 from parley.services.cases import (
     apply_transition,
     cases_of_message,
     customer_on_hold,
     invoice_line,
+    trusted_text,
 )
 from parley.services.runtime import Runtime
 
@@ -64,8 +65,12 @@ def stale_reason(session: Session, message: Message) -> str | None:
     if customer_on_hold(session, customer.id):
         return "the customer has a dispute or payment claim being looked into"
     if message.channel == "email":
+        tenant = session.get_one(Tenant, message.tenant_id)
         problems = check_draft(
-            message.subject, message.body, [invoice_line(c.invoice) for c in cases]
+            message.subject,
+            message.body,
+            [invoice_line(c.invoice) for c in cases],
+            trusted_text(tenant.name, customer.name, tenant.payment_link),
         )
         if problems:
             return "the invoices changed since it was written: " + "; ".join(problems)

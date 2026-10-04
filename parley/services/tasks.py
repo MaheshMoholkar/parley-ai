@@ -26,13 +26,14 @@ from parley.core.domain import (
     TaskStatus,
 )
 from parley.core.workflow import WorkflowError, on_task_resolved
-from parley.db.models import Case, Dispute, Message, Task, Tenant
+from parley.db.models import Case, Customer, Dispute, Message, Task, Tenant
 from parley.services.cases import (
     NotFoundError,
     apply_transition,
     cases_of_message,
     invoice_line,
     record_amounts,
+    trusted_text,
 )
 from parley.services.sendable import stale_reason
 
@@ -64,7 +65,7 @@ def resolve_task(
         raise TaskError([f"task is already {task.status}"])
 
     if task.kind == TaskKind.APPROVE_SEND:
-        _resolve_approval(session, task, action, subject, body)
+        _resolve_approval(session, tenant, task, action, subject, body)
     else:
         _resolve_case_task(session, tenant, task, action, now)
 
@@ -75,7 +76,12 @@ def resolve_task(
 
 
 def _resolve_approval(
-    session: Session, task: Task, action: TaskAction, subject: str | None, body: str | None
+    session: Session,
+    tenant: Tenant,
+    task: Task,
+    action: TaskAction,
+    subject: str | None,
+    body: str | None,
 ) -> None:
     if task.message_id is None:
         raise TaskError(["approval task has no message"])
@@ -98,7 +104,10 @@ def _resolve_approval(
             raise TaskError([f"{action} does not apply to an approval task"])
 
     cases = cases_of_message(session, message.id)
-    problems = check_draft(message.subject, message.body, [invoice_line(c.invoice) for c in cases])
+    lines = [invoice_line(c.invoice) for c in cases]
+    customer = session.get_one(Customer, message.customer_id)
+    trusted = trusted_text(tenant.name, customer.name, tenant.payment_link)
+    problems = check_draft(message.subject, message.body, lines, trusted)
     if problems:
         raise TaskError(problems)
     reason = stale_reason(session, message)

@@ -285,6 +285,11 @@ def record_amounts(session: Session, message_id: uuid.UUID, cases: list[Case]) -
         link.amount_due = amounts.get(link.case_id, link.amount_due)
 
 
+def trusted_text(*texts: str | None) -> list[str]:
+    """Text from the books a draft may quote as it is (see check_draft)."""
+    return [text for text in texts if text]
+
+
 def invoice_line(invoice: Invoice) -> InvoiceLine:
     return InvoiceLine(
         number=invoice.number,

@@ -10,6 +10,7 @@ from typing import Literal
 import anthropic
 from anthropic import AnthropicBedrockMantle
 from anthropic.types import OutputConfigParam
+from pydantic import ValidationError
 
 from parley.ports.model import Completion, ModelError, T, Tier, TokenUsage
 
@@ -48,6 +49,11 @@ class BedrockModel:
             )
         except anthropic.APIError as exc:
             raise ModelError(f"{type(exc).__name__}: {exc}") from exc
+        except (ValidationError, ValueError) as exc:
+            # The model's output did not fit the requested shape (for example a
+            # confidence of 1.5, or text instead of JSON). Treat it like any
+            # other failed call; never let it escape as a crash.
+            raise ModelError(f"invalid output: {exc}") from exc
         latency_ms = int((time.monotonic() - started) * 1000)
 
         if response.stop_reason == "refusal":

@@ -83,3 +83,37 @@ def test_brief_limits() -> None:
     assert check_brief("Pays late but always pays. Prefers Hindi.") == []
     assert check_brief("word " * 151) == ["brief is longer than 150 words"]
     assert check_brief("Usually pays Rs. 5000 at a time.") == ["brief contains an amount"]
+
+
+# --- Bypasses found in review: the right facts are present, plus a wrong one ---------
+
+RIGHT = "Invoice INV-1 for INR 4,000.00 was due on 01 Sep 2026."
+SEPT = [InvoiceLine("INV-1", 400000, "INR", date(2026, 9, 1))]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "Pay just 2,000 rupees to settle.",
+        "Or two thousand rupees.",
+        "That is 2.000,00 INR.",
+        "New due date: September 30, 2026.",
+        "Pay by 30-09-2026.",
+        "Pay by 30th September 2026.",
+        "Pay by 30th September.",
+    ],
+)
+def test_a_second_wrong_amount_or_date_is_caught(extra: str) -> None:
+    assert check_draft("Reminder", f"{RIGHT} {extra}", SEPT) != []
+
+
+def test_invoice_numbers_match_whole_words() -> None:
+    body = "Invoice INV-10 for INR 4,000.00 was due on 01 Sep 2026."
+    assert "invoice number INV-1 is missing" in check_draft("Reminder", body, SEPT)
+
+
+def test_names_and_the_payment_link_may_contain_numbers() -> None:
+    body = f"Dear Shop 247,\n{RIGHT} Pay at https://pay.example/acme?id=4471\nAcme 2000 Ltd"
+    trusted = ["Shop 247", "https://pay.example/acme?id=4471", "Acme 2000 Ltd"]
+    assert check_draft("Reminder", body, SEPT, trusted) == []
+    assert check_draft("Reminder", body, SEPT) != []  # not without saying so

@@ -30,7 +30,7 @@ def test_tampered_messages_are_caught(rt: Runtime, tmp_path: Path, clock: FakeCl
     with rt.session_factory.begin() as session:
         message = session.scalars(select(Message)).one()
         message.body = message.body.replace("INR 1,000.00", "INR 1,500.00")
-        message.created_at = datetime(2026, 1, 4, 11, 0, tzinfo=IST)  # a Sunday
+        message.sent_at = datetime(2026, 1, 4, 11, 0, tzinfo=IST)  # a Sunday
         case = session.scalars(select(Case)).one()
         session.add(
             Dispute(

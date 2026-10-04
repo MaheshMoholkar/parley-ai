@@ -44,16 +44,40 @@ _MONEY = re.compile(
     r"(?P<cur>INR|USD|EUR|GBP|AED|SGD|JPY|Rs\.?|₹|\$|€|£)\s?(?P<num>\d[\d,]*(?:\.\d+)?)", re.I
 )
 
-# "01 Jan 2026", "1 January 2026", "2026-01-01", "01/01/2026" (day first)
+# "01 Jan 2026", "1st January 2026", "January 1, 2026", "2026-01-01",
+# "01/01/2026" and "01-01-2026" (day first)
 _DATE_PATTERNS = [
-    (re.compile(r"\b\d{1,2} [A-Z][a-z]{2,8} \d{4}\b"), ("%d %b %Y", "%d %B %Y")),
+    (
+        re.compile(r"\b\d{1,2}(?:st|nd|rd|th)? (?:of )?[A-Z][a-z]{2,8},? \d{4}\b"),
+        ("%d %b %Y", "%d %B %Y"),
+    ),
+    (re.compile(r"\b[A-Z][a-z]{2,8} \d{1,2}(?:st|nd|rd|th)?,? \d{4}\b"), ("%b %d %Y", "%B %d %Y")),
     (re.compile(r"\b\d{4}-\d{2}-\d{2}\b"), ("%Y-%m-%d",)),
     (re.compile(r"\b\d{1,2}/\d{1,2}/\d{4}\b"), ("%d/%m/%Y",)),
+    (re.compile(r"\b\d{1,2}-\d{1,2}-\d{4}\b"), ("%d-%m-%Y",)),
 ]
 
+# What is left once checked amounts, dates and invoice numbers are taken out
+# must not look like money or a date: a number of three or more digits or
+# with separators ("2,000 rupees", "2.000,00 INR"), an amount in words, or a
+# day and month without a year ("30th September").
+_LEFTOVER_NUMBER = re.compile(r"\d+(?:[,.]\d+)+|\d{3,}")
+_NUMBER_WORDS = re.compile(
+    r"\b(hundred|thousand|lakhs?|lacs?|crores?|million|billion|hazaa?r|sau)\b", re.I
+)
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*"
+_PARTIAL_DATE = re.compile(
+    rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?{_MONTH}\b|\b{_MONTH}\s+\d{{1,2}}(?:st|nd|rd|th)?\b",
+    re.I,
+)
 
-def check_draft(subject: str, body: str, lines: Sequence[InvoiceLine]) -> list[str]:
-    """Return a list of problems; an empty list means the draft may be sent."""
+
+def check_draft(
+    subject: str, body: str, lines: Sequence[InvoiceLine], trusted_text: Sequence[str] = ()
+) -> list[str]:
+    """Return a list of problems; an empty list means the draft may be sent.
+    `trusted_text` is text from the books that the draft may quote as it is
+    (business and customer names, the payment link), even if it has numbers."""
     problems: list[str] = []
     text = f"{subject}\n{body}"
     if not subject.strip() or not body.strip():
@@ -65,8 +89,37 @@ def check_draft(subject: str, body: str, lines: Sequence[InvoiceLine]) -> list[s
     problems += _check_amounts(text, lines)
     problems += _check_dates(text, lines)
     for line in lines:
-        if line.number not in text:
+        if not _invoice_number(line.number).search(text):
             problems.append(f"invoice number {line.number} is missing")
+    problems += _check_leftovers(text, lines, trusted_text)
+    return problems
+
+
+def _invoice_number(number: str) -> re.Pattern[str]:
+    """The number as a whole word: "INV-1" is not found in "INV-10"."""
+    return re.compile(rf"(?<![A-Za-z0-9]){re.escape(number)}(?![A-Za-z0-9])")
+
+
+def _check_leftovers(text: str, lines: Sequence[InvoiceLine], trusted: Sequence[str]) -> list[str]:
+    """Anything that looks like money or a date but was not checked above."""
+    rest = text
+    for known in sorted((t for t in trusted if t), key=len, reverse=True):
+        rest = rest.replace(known, " ")
+    for line in lines:
+        rest = _invoice_number(line.number).sub(" ", rest)
+        if line.display_details:  # from the books, e.g. "Order 4471"
+            rest = rest.replace(line.display_details, " ")
+    rest = _MONEY.sub(" ", rest)
+    for pattern, _ in _DATE_PATTERNS:
+        rest = pattern.sub(" ", rest)
+
+    problems = []
+    for match in _LEFTOVER_NUMBER.finditer(rest):
+        problems.append(f"number {match.group(0)!r} is not a checked amount or date")
+    for match in _NUMBER_WORDS.finditer(rest):
+        problems.append(f"amount in words ({match.group(0)!r}); write amounts in figures")
+    for match in _PARTIAL_DATE.finditer(rest):
+        problems.append(f"date {match.group(0)!r} has no year, so it cannot be checked")
     return problems
 
 
@@ -120,6 +173,7 @@ def _check_dates(text: str, lines: Sequence[InvoiceLine]) -> list[str]:
 
 
 def _parse_date(text: str, formats: tuple[str, ...]) -> date | None:
+    text = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", text).replace(",", "").replace(" of ", " ")
     for fmt in formats:
         try:
             return datetime.strptime(text, fmt).date()

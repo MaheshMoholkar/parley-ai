@@ -48,27 +48,52 @@ def read_received_replies(rt: Runtime, tenant_id: uuid.UUID) -> int:
     done = 0
     tried: set[uuid.UUID] = set()
     while True:
-        with rt.session_factory.begin() as session:
-            query = (
-                select(Message)
-                .where(
-                    Message.tenant_id == tenant_id,
-                    Message.direction == Direction.INBOUND,
-                    Message.status == MessageStatus.RECEIVED,
+        message_id = None
+        try:
+            with rt.session_factory.begin() as session:
+                query = (
+                    select(Message)
+                    .where(
+                        Message.tenant_id == tenant_id,
+                        Message.direction == Direction.INBOUND,
+                        Message.status == MessageStatus.RECEIVED,
+                    )
+                    .order_by(Message.created_at, Message.id)
+                    .limit(1)
+                    .with_for_update(skip_locked=True)
                 )
-                .order_by(Message.created_at, Message.id)
-                .limit(1)
-                .with_for_update(skip_locked=True)
-            )
-            if tried:
-                query = query.where(Message.id.not_in(tried))
-            message = session.scalar(query)
-            if message is None:
-                return done
-            tried.add(message.id)
-            with step("read_reply", tenant_id=tenant_id, message_id=message.id):
-                _handle_reply(rt, session, message)
-            done += 1
+                if tried:
+                    query = query.where(Message.id.not_in(tried))
+                message = session.scalar(query)
+                if message is None:
+                    return done
+                message_id = message.id
+                tried.add(message.id)
+                with step("read_reply", tenant_id=tenant_id, message_id=message.id):
+                    _handle_reply(rt, session, message)
+        except Exception:
+            if message_id is None:
+                raise
+            # Whatever went wrong (a bug, an odd email), this reply must not
+            # block the ones behind it: a person reads it instead.
+            log.exception("reading reply %s failed; handing it to a person", message_id)
+            _hand_to_person(rt, message_id)
+        done += 1
+
+
+def _hand_to_person(rt: Runtime, message_id: uuid.UUID) -> None:
+    now = rt.clock.now()
+    with rt.session_factory.begin() as session:
+        message = session.get_one(Message, message_id, with_for_update=True)
+        if message.status != MessageStatus.RECEIVED:
+            return
+        tenant = session.get_one(Tenant, message.tenant_id)
+        reply = Reply(ReplyIntent.OTHER, summary="The reply could not be read automatically.")
+        for case in cases_of_message(session, message.id, lock=True):
+            if case.state != CaseState.CLOSED:
+                transition = on_reply(case.view(), reply, tenant.policy, now, tenant.zone)
+                apply_transition(session, case, transition, now, source_message_id=message.id)
+        message.status = MessageStatus.READ
 
 
 def _handle_reply(rt: Runtime, session: Session, message: Message) -> None:
