@@ -17,6 +17,7 @@ from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
 
+from parley.adapters.secrets import store_secret
 from parley.bootstrap import build_runtime, configure_logging, configure_tracing
 from parley.config import Settings, get_settings
 from parley.services.runtime import Runtime
@@ -44,6 +45,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     create.add_argument("--payments-csv", help="with --invoices-csv: a payments CSV")
     create.add_argument("--webhook-url", help="where to post outbound events")
+    create.add_argument(
+        "--save-to-secret",
+        metavar="NAME",
+        help="save the API key and webhook secret to this AWS Secrets Manager secret "
+        "instead of printing them (on AWS the output goes to the logs)",
+    )
 
     webhook = commands.add_parser("set-webhook", help="set or remove a tenant's webhook URL")
     webhook.add_argument("--tenant-id", required=True, type=uuid.UUID)
@@ -89,8 +96,17 @@ def _run(args: argparse.Namespace, rt: Runtime, settings: Settings) -> None:
                 session, args.name, args.timezone, adapter_config, webhook_url=args.webhook_url
             )
         print(f"tenant id:      {tenant.id}")
-        print(f"API key:        {api_key}   (shown once; store it now)")
-        print(f"webhook secret: {tenant.webhook_secret}   (signs events in and out)")
+        if args.save_to_secret:
+            credentials = {
+                "tenant_id": str(tenant.id),
+                "api_key": api_key,
+                "webhook_secret": tenant.webhook_secret,
+            }
+            arn = store_secret(args.save_to_secret, json.dumps(credentials))
+            print(f"API key and webhook secret saved to {arn}")
+        else:
+            print(f"API key:        {api_key}   (shown once; store it now)")
+            print(f"webhook secret: {tenant.webhook_secret}   (signs events in and out)")
 
     elif args.command == "set-webhook":
         with rt.session_factory.begin() as session:

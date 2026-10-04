@@ -183,13 +183,19 @@ class CallStart:
     language: str
 
 
-def start_call(rt: Runtime, token: str) -> CallStart | None:
+def start_call(rt: Runtime, token: str, test: bool) -> CallStart | None:
     """The audio is connected; returns what the speech model needs, or None if
-    this call should not be talking (unknown token, already ended)."""
+    this call should not be talking: an unknown token, a call that ended or
+    already has its audio connected, or a phone call's token used on the browser
+    page (or the other way round). So a token that leaks (it appears in URLs
+    and so in access logs) cannot be used to open a second conversation."""
     with rt.session_factory.begin() as session:
         call = _lock_call(session, token)
         if call is None or call.status != CallStatus.IN_PROGRESS:
             return None
+        if call.test != test or call.connected_at is not None:
+            return None
+        call.connected_at = rt.clock.now()
         tenant = session.get_one(Tenant, call.tenant_id)
         customer = session.get_one(Customer, call.customer_id)
         language = customer.language or tenant.default_language

@@ -1,6 +1,7 @@
 """Creating tenants, changing their settings, and finding a tenant from its API key."""
 
 import hashlib
+import ipaddress
 import secrets
 import uuid
 from typing import Any
@@ -86,8 +87,23 @@ def set_transfer_number(session: Session, tenant_id: uuid.UUID, number: str | No
 
 
 def _check_webhook_url(url: str | None) -> None:
-    if url is not None and urlsplit(url).scheme not in ("https", "http"):
+    """A webhook goes to the tenant's own public server. Addresses inside this
+    network (the cloud metadata service at 169.254.169.254, private ranges,
+    localhost) are refused, so a webhook cannot be aimed at internal services."""
+    if url is None:
+        return
+    parts = urlsplit(url)
+    if parts.scheme not in ("https", "http") or not parts.hostname:
         raise ValueError(f"webhook URL must start with https:// or http:// (got {url!r})")
+    host = parts.hostname.lower()
+    if host == "localhost" or host.endswith((".localhost", ".internal", ".local")):
+        raise ValueError(f"webhook URL must be a public address (got {host!r})")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return  # a host name
+    if not address.is_global:
+        raise ValueError(f"webhook URL must be a public address (got {host!r})")
 
 
 def find_tenant_by_api_key(session: Session, api_key: str) -> Tenant | None:

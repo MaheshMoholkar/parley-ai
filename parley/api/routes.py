@@ -76,11 +76,26 @@ def sync_now(rt: RuntimeDep, tenant: TenantDep) -> SyncOut:
     return SyncOut(**asdict(result))
 
 
-async def raw_body(request: Request) -> bytes:
-    return await request.body()
-
-
 MAX_EVENT_BYTES = 256 * 1024
+MAX_EMAIL_BYTES = 10 * 1024 * 1024
+
+
+async def read_body(request: Request, limit: int) -> bytes:
+    """The request body, refused with 413 as soon as it passes `limit` bytes.
+    Read in chunks, so an oversized upload is never held in memory whole."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "request too large")
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > limit:
+            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "request too large")
+    return bytes(body)
+
+
+async def event_body(request: Request) -> bytes:
+    return await read_body(request, MAX_EVENT_BYTES)
 
 
 @router.post("/v1/events", status_code=status.HTTP_202_ACCEPTED)
@@ -88,7 +103,7 @@ def receive_source_event(
     rt: RuntimeDep,
     session: SessionDep,
     tenant: TenantDep,
-    body: Annotated[bytes, Depends(raw_body)],
+    body: Annotated[bytes, Depends(event_body)],
     signature: Annotated[str | None, Header(alias="X-Parley-Signature")] = None,
 ) -> EventOut:
     """Receive `invoice.created`, `invoice.updated`, `invoice.voided` or
@@ -99,8 +114,6 @@ def receive_source_event(
     new event makes the worker sync this tenant on its next round; a repeated
     event id is acknowledged and ignored.
     """
-    if len(body) > MAX_EVENT_BYTES:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "event too large")
     if not valid_signature(body, signature, tenant.webhook_secret):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "bad or missing signature")
     try:
@@ -236,9 +249,6 @@ def resolve(
     return TaskOut.model_validate(task)
 
 
-MAX_EMAIL_BYTES = 10 * 1024 * 1024
-
-
 @router.post("/v1/inbound/email", status_code=status.HTTP_202_ACCEPTED)
 async def inbound_email(
     request: Request,
@@ -252,14 +262,13 @@ async def inbound_email(
     """
     if not rt.inbound_secret:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "inbound email is not configured")
-    raw = await request.body()
-    if len(raw) > MAX_EMAIL_BYTES:
-        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "email too large")
+    raw = await read_body(request, MAX_EMAIL_BYTES)
     if not valid_signature(raw, signature, rt.inbound_secret):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "bad or missing signature")
 
-    email = parse_email(raw)
-    # receive_email talks to the database synchronously, so run it off the event loop.
+    # Parsing untrusted mail and the database work are both blocking, so they
+    # run off the event loop, which keeps serving other requests and calls.
+    email = await run_in_threadpool(parse_email, raw)
     result = await run_in_threadpool(receive_email, rt, email)
     return InboundOut(outcome=result.outcome, message_id=result.message_id, reason=result.reason)
 

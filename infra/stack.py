@@ -139,6 +139,17 @@ class ParleyStack(Stack):
                 resources=[f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:parley/*"],
             )
         )
+        # `parley create-tenant --save-to-secret parley/tenants/<name>` keeps a new
+        # tenant's API key out of the logs.
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="TenantCredentials",
+                actions=["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue"],
+                resources=[
+                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:parley/tenants/*"
+                ],
+            )
+        )
 
         environment = self._environment()
         secrets = {
@@ -287,7 +298,8 @@ class ParleyStack(Stack):
         CfnOutput(
             self,
             "CreateTenantCommand",
-            description="Create a tenant (prints its API key and webhook secret in the task logs)",
+            description="Create a tenant; its API key and webhook secret are saved to "
+            "Secrets Manager as parley/tenants/<name>",
             value=(
                 f"aws ecs run-task --cluster {cluster.cluster_name} "
                 f"--task-definition {migrate_task.task_definition_arn} --launch-type FARGATE "
@@ -296,7 +308,7 @@ class ParleyStack(Stack):
                 + f"],securityGroups=[{migrate_group.security_group_id}]}}' "
                 '--overrides \'{"containerOverrides":[{"name":"migrate","command":'
                 '["parley","create-tenant","--name","<name>","--invoices-csv",'
-                '"s3://<bucket>/<key>"]}]}\''
+                '"s3://<bucket>/<key>","--save-to-secret","parley/tenants/<name>"]}]}\''
             ),
         )
 

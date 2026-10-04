@@ -50,7 +50,20 @@ def parse_email(raw: bytes) -> InboundMessage:
         subject=str(message["Subject"] or ""),
         text=strip_quoted_text(_body_text(message)),
         received_at=received_at,
+        sender_authenticated=_sender_authenticated(message),
     )
+
+
+def _sender_authenticated(message: EmailMessage) -> bool:
+    """SES adds an Authentication-Results header at the top of each email it
+    receives. Only that first header counts: a sender can put fake ones below it."""
+    headers = message.get_all("Authentication-Results") or []
+    if not headers:
+        return False
+    first = str(headers[0]).lower()
+    if not first.strip().startswith("amazonses.com"):
+        return False
+    return "dmarc=pass" in first or ("spf=pass" in first and "dkim=pass" in first)
 
 
 def reply_token(recipients: tuple[str, ...]) -> str | None:
@@ -83,8 +96,34 @@ def _body_text(message: EmailMessage) -> str:
     return str(content)
 
 
+# One token per match: a complete tag, a run of text, or a lone "<". Each
+# alternative consumes input without backtracking, so this is linear in the
+# input whatever a hostile sender puts in it (a regex like "<script.*?</script>"
+# is not: it took hours on a few megabytes of unclosed tags).
+_TOKENS = re.compile(r"<[^<>]*>|[^<]+|<")
+_TAG = re.compile(r"<\s*(/?)\s*([a-zA-Z0-9]+)")
+_SKIPPED = frozenset({"script", "style", "blockquote"})
+_LINE_BREAKS = frozenset({"br", "p", "div"})
+
+
+# Inbound mail is untrusted; a reply never needs more text than this.
+MAX_HTML_CHARS = 500_000
+
+
 def _html_to_text(html: str) -> str:
-    html = re.sub(r"(?is)<(script|style).*?</\1>", "", html)
-    html = re.sub(r"(?i)<br\s*/?>|</p>|</div>", "\n", html)
-    html = re.sub(r"(?i)<blockquote.*?</blockquote>", "", html, flags=re.S)
-    return unescape(re.sub(r"<[^>]+>", "", html))
+    """Text of an HTML email body, without scripts, styles and quoted earlier
+    messages (<blockquote>)."""
+    parts: list[str] = []
+    skipping = 0  # depth inside skipped elements
+    for token in _TOKENS.findall(html[:MAX_HTML_CHARS]):
+        tag = _TAG.match(token) if token.endswith(">") else None
+        if tag is None:
+            if not skipping:
+                parts.append(token)
+            continue
+        closing, name = tag.group(1) == "/", tag.group(2).lower()
+        if name in _SKIPPED:
+            skipping = max(0, skipping - 1) if closing else skipping + 1
+        elif name in _LINE_BREAKS and not skipping and (closing or name == "br"):
+            parts.append("\n")
+    return unescape("".join(parts))

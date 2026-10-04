@@ -26,6 +26,10 @@ class InboundMessage:
     subject: str
     text: str  # the new text only, with quoted earlier messages removed
     received_at: datetime | None = None
+    # True when the receiving provider checked that the sender's domain sent it
+    # (DMARC, or both SPF and DKIM, passed). Anyone can write any From address,
+    # so a reply without a reply token is matched by sender only when this holds.
+    sender_authenticated: bool = False
 
 
 class ChannelPort(Protocol):

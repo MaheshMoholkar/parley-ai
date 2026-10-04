@@ -155,3 +155,17 @@ def test_a_browser_test_call(rt: Runtime, tmp_path: Path) -> None:
     with client.websocket_connect(started.json()["websocket_path"]) as ws:
         ws.receive_text()  # "start"
         assert json.loads(ws.receive_text()) == {"type": "end"}
+
+
+def test_a_phone_calls_token_cannot_open_a_browser_conversation(
+    rt: Runtime, tmp_path: Path
+) -> None:
+    client, _ = setup(rt, tmp_path, ScriptedSpeech([HELLO, END]))
+    run_once(rt, sync_interval=DAY)
+    token = call_row(rt).token
+    twilio_post(client, f"/v1/voice/twilio/answer?token={token}", {"AnsweredBy": "human"})
+
+    with client.websocket_connect(f"/v1/voice/browser?token={token}") as ws:
+        ws.receive_text()  # "start"
+        assert json.loads(ws.receive_text()) == {"type": "end"}
+    assert call_row(rt).connected_at is None  # the real stream can still connect

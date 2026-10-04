@@ -46,3 +46,19 @@ def test_no_token_without_a_reply_address() -> None:
 def test_outlook_style_quotes_are_removed() -> None:
     text = "Paying Friday.\n\n-----Original Message-----\nFrom: Acme\nold"
     assert strip_quoted_text(text) == "Paying Friday."
+
+
+def test_html_is_reduced_to_its_text_quickly_whatever_it_contains() -> None:
+    import time
+
+    from parley.adapters.channels.email_inbound import _html_to_text
+
+    html = (
+        "<p>Will pay <b>Friday</b> &amp; thanks<br>Asha</p>"
+        "<blockquote>older <p>quoted</p> text</blockquote><SCRIPT>x()</script>5 < 6"
+    )
+    assert _html_to_text(html) == "Will pay Friday & thanks\nAsha\n5 < 6"
+    # Unclosed tags used to take minutes (a regex that backtracked).
+    started = time.monotonic()
+    _html_to_text("<script" * 1_000_000)
+    assert time.monotonic() - started < 2

@@ -42,14 +42,15 @@ END_GRACE_SECONDS = 2.5
 
 
 async def run_call(
-    rt: Runtime, token: str, leg: CallLeg, end_grace: float = END_GRACE_SECONDS
+    rt: Runtime, token: str, leg: CallLeg, test: bool = False, end_grace: float = END_GRACE_SECONDS
 ) -> None:
-    """Hold the conversation for the call with this token, then finish it."""
+    """Hold the conversation for the call with this token, then finish it.
+    `test` is True for the browser page, False for a phone call's stream."""
     if rt.speech is None:
         log.error("a call was connected but no speech model is configured")
         await leg.hang_up()
         return
-    start = await asyncio.to_thread(start_call, rt, token)
+    start = await asyncio.to_thread(start_call, rt, token, test)
     if start is None:
         log.warning("a call stream arrived for an unknown or finished call")
         await leg.hang_up()

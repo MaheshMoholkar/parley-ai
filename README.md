@@ -269,7 +269,8 @@ Node.js (for the CDK command line).
    regions.
 5. Create a tenant: upload the aging report to the `DataBucketName` bucket and
    run the `CreateTenantCommand` output with your values. Its API key and
-   webhook secret appear in the task's logs (CloudWatch Logs), once.
+   webhook secret are saved to Secrets Manager as `parley/tenants/<name>`,
+   never written to the logs.
 
 For calls, also set `"speech": true, "twilio": true` and
 `"voice_allowed_numbers"`, and first create a Secrets Manager secret named

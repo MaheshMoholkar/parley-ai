@@ -194,3 +194,11 @@ def test_no_webhook_url_means_no_events(rt: Runtime, tmp_path: Path) -> None:
         set_webhook_url(session, setup.tenant_id, "https://host.example/hooks")
     with rt.session_factory.begin() as session, pytest.raises(ValueError, match="https"):
         set_webhook_url(session, setup.tenant_id, "ftp://host.example")
+    for internal in (
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.5/hook",
+        "http://[::1]/hook",
+        "https://localhost/hook",
+    ):
+        with rt.session_factory.begin() as session, pytest.raises(ValueError, match="public"):
+            set_webhook_url(session, setup.tenant_id, internal)

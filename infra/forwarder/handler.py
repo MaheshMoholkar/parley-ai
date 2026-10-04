@@ -14,6 +14,7 @@ import hmac
 import json
 import os
 import urllib.request
+from email.parser import BytesHeaderParser
 from typing import Any
 from urllib.parse import unquote_plus
 
@@ -34,9 +35,24 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, int]:
         if key.endswith(SES_SETUP_OBJECT):
             continue  # SES's test write when the rule is created; not an email
         raw = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+        verdict = ses_verdict(raw)
+        if verdict:
+            print(f"not forwarding {key}: {verdict}")  # goes to CloudWatch Logs
+            continue
         forward(raw, os.environ["INBOUND_URL"], inbound_secret())
         forwarded += 1
     return {"forwarded": forwarded}
+
+
+def ses_verdict(raw: bytes) -> str:
+    """Why SES says not to trust this email ("" if it passed). SES adds its
+    verdict headers at the top; a sender's own copies further down do not count."""
+    headers = BytesHeaderParser().parsebytes(raw)
+    for name in ("X-SES-Virus-Verdict", "X-SES-Spam-Verdict"):
+        values = headers.get_all(name) or []
+        if values and str(values[0]).strip().upper() == "FAIL":
+            return f"{name}: FAIL"
+    return ""
 
 
 def forward(raw: bytes, url: str, secret: str) -> None:

@@ -83,11 +83,19 @@ def reply_address(rt: Runtime) -> str:
     return f"reply+{token}@replies.example.com"
 
 
+# What SES puts at the top of an email whose sender checked out.
+SES_PASS = "Authentication-Results: amazonses.com; spf=pass; dkim=pass; dmarc=pass\n"
+
+
 def raw_email(
-    to: str, body: str, sender: str = "asha@example.com", msg_id: str = "<m1@x>"
+    to: str,
+    body: str,
+    sender: str = "asha@example.com",
+    msg_id: str = "<m1@x>",
+    auth: str = SES_PASS,
 ) -> bytes:
     return (
-        f"From: {sender}\nTo: {to}\nSubject: Re: reminder\nMessage-ID: {msg_id}\n"
+        f"{auth}From: {sender}\nTo: {to}\nSubject: Re: reminder\nMessage-ID: {msg_id}\n"
         f"Content-Type: text/plain; charset=utf-8\n\n{body}\n"
     ).encode()
 
@@ -154,6 +162,26 @@ def test_reply_without_token_is_matched_by_sender(
         ]
         == "stored"
     )
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [
+        "",  # no verdict at all
+        "Authentication-Results: amazonses.com; spf=fail; dkim=none; dmarc=fail\n",
+        # A forged "pass" below SES's real verdict does not count.
+        "Authentication-Results: amazonses.com; spf=fail; dmarc=fail\n"
+        "Authentication-Results: amazonses.com; dmarc=pass\n",
+    ],
+)
+def test_a_forged_sender_is_not_matched_to_the_customer(
+    client: TestClient, rt: Runtime, tmp_path: Path, auth: str
+) -> None:
+    remind(rt, tmp_path, [A1])
+    raw = raw_email("accounts@acme.example", "Already paid, ref 4471", auth=auth)
+    assert post(client, raw).json()["outcome"] == "unmatched"
+    with rt.session_factory() as session:
+        assert "not authenticated" in session.scalars(select(UnmatchedInbound.reason)).one()
 
 
 def test_unknown_sender_is_kept_for_an_operator(

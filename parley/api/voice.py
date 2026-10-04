@@ -34,6 +34,7 @@ from starlette.concurrency import run_in_threadpool
 from parley.adapters.channels.voice.browser import BrowserLeg
 from parley.adapters.channels.voice.twilio import HANG_UP_TWIML, TwilioStreamLeg, TwilioVoice
 from parley.api.dependencies import RuntimeDep, SessionDep, TenantDep
+from parley.api.routes import read_body
 from parley.api.schemas import TestCallOut
 from parley.ports.voice import VoiceError
 from parley.services.calls import answered, create_test_call, provider_ended
@@ -48,6 +49,8 @@ TwilioSignature = Annotated[str | None, Header(alias="X-Twilio-Signature")]
 
 # Twilio's final call statuses that mean nobody answered.
 NOT_ANSWERED = {"busy", "no-answer", "failed", "canceled"}
+# Twilio's callback forms are a few hundred bytes.
+MAX_TWILIO_FORM_BYTES = 64 * 1024
 
 
 @router.get("/voice", response_class=HTMLResponse, include_in_schema=False)
@@ -63,7 +66,8 @@ async def _twilio_form(request: Request, rt: Runtime, signature: str | None) -> 
     if not isinstance(rt.voice, TwilioVoice):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Twilio is not configured")
     # Twilio posts application/x-www-form-urlencoded.
-    form = dict(parse_qsl((await request.body()).decode(), keep_blank_values=True))
+    body = await read_body(request, MAX_TWILIO_FORM_BYTES)
+    form = dict(parse_qsl(body.decode(errors="replace"), keep_blank_values=True))
     # Twilio signs the URL it called, which is our public URL, not the one this
     # server sees behind a load balancer.
     url = rt.voice.public_url + request.url.path
@@ -155,7 +159,7 @@ async def browser_stream(websocket: WebSocket, token: str) -> None:
     leg = BrowserLeg(receive, websocket.send_bytes, websocket.send_text, rt.speech.output_rate)
     try:
         await leg.start()
-        await run_call(rt, token, leg)
+        await run_call(rt, token, leg, test=True)
     finally:
         await _close(websocket)
 

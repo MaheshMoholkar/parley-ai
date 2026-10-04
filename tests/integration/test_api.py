@@ -106,3 +106,14 @@ def test_review_page_is_served(client: TestClient) -> None:
     response = client.get("/review")
     assert response.status_code == 200
     assert "Tasks waiting for a person" in response.text
+
+
+def test_oversized_bodies_are_refused_before_they_are_read(client: TestClient, rt: Runtime) -> None:
+    rt.inbound_secret = "s"
+
+    def chunks():  # type: ignore[no-untyped-def]
+        for _ in range(11):
+            yield b"x" * (1024 * 1024)
+
+    response = client.post("/v1/inbound/email", content=chunks())
+    assert response.status_code == 413

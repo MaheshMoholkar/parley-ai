@@ -64,3 +64,13 @@ def test_each_stored_email_is_posted_signed(monkeypatch: pytest.MonkeyPatch) -> 
     assert request.data == raw
     expected = "sha256=" + hmac.new(b"s3cret", raw, hashlib.sha256).hexdigest()
     assert request.get_header("X-parley-signature") == expected
+
+
+def test_mail_ses_marked_as_spam_or_virus_is_not_forwarded() -> None:
+    spam = b"X-SES-Spam-Verdict: FAIL\r\nX-SES-Virus-Verdict: PASS\r\nFrom: x@y\r\n\r\nhi"
+    assert forwarder.ses_verdict(spam) == "X-SES-Spam-Verdict: FAIL"
+    clean = b"X-SES-Spam-Verdict: PASS\r\nX-SES-Virus-Verdict: PASS\r\nFrom: x@y\r\n\r\nhi"
+    assert forwarder.ses_verdict(clean) == ""
+    # A sender cannot override SES's verdict with their own header further down.
+    forged = b"X-SES-Spam-Verdict: FAIL\r\nX-SES-Spam-Verdict: PASS\r\n\r\nhi"
+    assert forwarder.ses_verdict(forged) == "X-SES-Spam-Verdict: FAIL"

@@ -103,9 +103,12 @@ def _match(session: Session, email: InboundMessage) -> tuple[Customer | None, li
             ]
             return customer, cases, ""
 
-    # No usable token: fall back to the sender's address.
+    # No usable token: fall back to the sender's address, but only if the
+    # receiving provider confirmed the sender (a From address is easy to forge).
     if not email.sender:
         return None, [], "no sender address"
+    if not email.sender_authenticated:
+        return None, [], f"no reply token, and the sender {email.sender} is not authenticated"
     customers = session.scalars(
         select(Customer)
         .join(Case, Case.customer_id == Customer.id)
