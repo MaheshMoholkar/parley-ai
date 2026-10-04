@@ -259,6 +259,25 @@ def on_delivery_failed(current: CaseView, reason: str) -> Transition | None:
     return _needs_human(TaskKind.ESCALATION, reason)
 
 
+def on_reminder_sent(current: CaseView, policy: Policy, now: datetime) -> Transition | None:
+    """The reminder actually went out (perhaps days after it was queued, if it
+    waited for approval). The wait for a reply counts from now."""
+    if current.state != CaseState.AWAITING_REPLY:
+        return None
+    return Transition(
+        CaseState.AWAITING_REPLY, next_action_at=now + timedelta(days=policy.reminder_gap_days)
+    )
+
+
+def on_reminder_withdrawn(current: CaseView, now: datetime) -> Transition | None:
+    """A queued reminder about this case was withdrawn before it went out (see
+    `MessageStatus.WITHDRAWN`). Nothing reached the customer, so the case goes
+    back to Scheduled and the withdrawn reminder does not count towards the limit."""
+    if current.state != CaseState.AWAITING_REPLY:
+        return None
+    return Transition(CaseState.SCHEDULED, next_action_at=now, grant_extra_reminders=1)
+
+
 # A call that reached nobody is tried again (as the next reminder) after this long.
 CALL_RETRY_DELAY = timedelta(days=1)
 
@@ -325,6 +344,14 @@ def on_task_resolved(
     """A person resolved a task on this case (not an approve_send task, which acts
     on the message instead). Returns None if the case has already moved on."""
     if current.state not in (CaseState.NEEDS_HUMAN, CaseState.INVESTIGATING):
+        return None
+    if (
+        current.state == CaseState.INVESTIGATING
+        and kind == TaskKind.REVIEW_REPLY
+        and action == TaskAction.RESUME
+    ):
+        # A reply that arrived during an investigation was reviewed. The
+        # investigation goes on; only its own finding (or "close") ends it.
         return None
     match action:
         case TaskAction.CLOSE:

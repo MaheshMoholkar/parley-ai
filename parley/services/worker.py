@@ -7,7 +7,8 @@ Each round, for each tenant:
 3. read customer replies and act on them;
 4. investigate paid claims and disputes;
 5. act on due cases (reminders, escalations, timeouts);
-6. draft queued reminders (model, checks, approval gate);
+6. withdraw queued reminders that no longer apply, then draft the rest
+   (model, checks, approval gate);
 7. deliver pending messages from the outbox (emails are sent, calls dialled);
 8. close calls the phone provider never reported back on;
 9. post pending events to the tenant's webhook.
@@ -35,6 +36,7 @@ from parley.services.events import latest_event_at
 from parley.services.investigation import run_investigations
 from parley.services.replies import read_received_replies
 from parley.services.runtime import Runtime
+from parley.services.sendable import withdraw_stale_messages
 from parley.services.sync import sync_tenant
 from parley.services.webhooks import deliver_webhooks
 
@@ -77,6 +79,7 @@ def run_tenant_once(
     read_received_replies(rt, tenant_id)
     run_investigations(rt, tenant_id)
     run_due_cases(rt, tenant_id)
+    withdraw_stale_messages(rt, tenant_id)
     draft_queued_messages(rt, tenant_id)
     deliver_pending_messages(rt, tenant_id)
     finish_stale_calls(rt, tenant_id)

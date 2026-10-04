@@ -300,3 +300,10 @@ def test_approval_actions_do_not_apply_to_case_tasks() -> None:
         on_task_resolved(
             case(CaseState.NEEDS_HUMAN), TaskKind.ESCALATION, TaskAction.APPROVE, POLICY, NOW
         )
+
+
+def test_resuming_a_reply_review_does_not_end_an_investigation() -> None:
+    current = case(CaseState.INVESTIGATING, reminders_sent=2)
+    assert on_task_resolved(current, TaskKind.REVIEW_REPLY, TaskAction.RESUME, POLICY, NOW) is None
+    closed = on_task_resolved(current, TaskKind.REVIEW_REPLY, TaskAction.CLOSE, POLICY, NOW)
+    assert closed is not None and closed.state == CaseState.CLOSED

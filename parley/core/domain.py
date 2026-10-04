@@ -104,6 +104,9 @@ class MessageStatus(StrEnum):
     SENT = "sent"
     FAILED = "failed"  # gave up after repeated delivery errors
     REJECTED = "rejected"  # a reviewer chose not to send it
+    # No longer right to send by the time it would go: the case closed, the
+    # customer was paused or disputed, or the amounts changed. Not sent.
+    WITHDRAWN = "withdrawn"
     # Inbound: received -> read
     RECEIVED = "received"  # stored, not yet read by the reply reader
     READ = "read"

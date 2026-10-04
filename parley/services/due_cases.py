@@ -14,7 +14,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 
 from opentelemetry import trace
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.orm import Session
 
 from parley.core.domain import (
@@ -23,15 +23,13 @@ from parley.core.domain import (
     CaseState,
     Direction,
     MessageStatus,
-    TaskKind,
-    TaskStatus,
 )
 from parley.core.messages import InvoiceLine, reminder_message
 from parley.core.policy import CONTACT_WINDOW, contact_allowed_at
 from parley.core.workflow import CannotContact, Contact, ContactLater, ContactNow, on_timer
-from parley.db.models import Case, Customer, Message, MessageCase, Task, Tenant
+from parley.db.models import Case, Customer, Message, MessageCase, Tenant
 from parley.services.calls import VOICE, callable_number
-from parley.services.cases import apply_transition
+from parley.services.cases import apply_transition, customer_on_hold
 from parley.services.runtime import Runtime
 from parley.services.tracing import annotate, step
 
@@ -89,19 +87,28 @@ def run_due_cases(rt: Runtime, tenant_id: uuid.UUID) -> int:
     return sum(rounds.values())
 
 
+def _is_due(now: datetime) -> ColumnElement[bool]:
+    """A case whose timer has run out. An Awaiting reply case whose reminder has
+    not gone out yet (still drafting, awaiting approval, or waiting for quiet
+    hours to end) is not due: the wait for a reply starts when it is sent."""
+    reminder_unsent = (
+        select(MessageCase.case_id)
+        .join(Message, Message.id == MessageCase.message_id)
+        .where(MessageCase.case_id == Case.id, Message.status.in_(UNSENT_STATUSES))
+        .exists()
+    )
+    return and_(
+        Case.paused.is_(False),
+        Case.state.in_(TIMED_STATES),
+        Case.next_action_at <= now,
+        ~and_(Case.state == CaseState.AWAITING_REPLY, reminder_unsent),
+    )
+
+
 def _lock_next_due_customer(
     session: Session, tenant_id: uuid.UUID, now: datetime, skip: set[uuid.UUID]
 ) -> Customer | None:
-    has_due_case = (
-        select(Case.id)
-        .where(
-            Case.customer_id == Customer.id,
-            Case.paused.is_(False),
-            Case.state.in_(TIMED_STATES),
-            Case.next_action_at <= now,
-        )
-        .exists()
-    )
+    has_due_case = select(Case.id).where(Case.customer_id == Customer.id, _is_due(now)).exists()
     query = (
         select(Customer)
         .where(Customer.tenant_id == tenant_id, Customer.paused.is_(False), has_due_case)
@@ -121,12 +128,7 @@ def _process_customer(
     policy = tenant.policy
     due_cases = session.scalars(
         select(Case)
-        .where(
-            Case.customer_id == customer.id,
-            Case.paused.is_(False),
-            Case.state.in_(TIMED_STATES),
-            Case.next_action_at <= now,
-        )
+        .where(Case.customer_id == customer.id, _is_due(now))
         .order_by(Case.opened_at, Case.id)
         .with_for_update()
     ).all()
@@ -163,15 +165,18 @@ def _contact_decision(
     """May this customer be sent a message right now?"""
     if not customer.email and call_number is None:
         return CannotContact("Customer has no email address or phone number we may call.")
-    if _is_on_hold(session, customer) or _has_unsent_message(session, customer):
+    if customer_on_hold(session, customer.id) or _has_unsent_message(session, customer):
         return ContactLater(now + HOLD_RECHECK)
 
+    # A message counts from when it was sent; one still on its way, from when
+    # it was queued.
+    contacted_at = func.coalesce(Message.sent_at, Message.created_at)
     recent = session.scalars(
-        select(Message.created_at).where(
+        select(contacted_at).where(
             Message.customer_id == customer.id,
             Message.direction == Direction.OUTBOUND,
             Message.status.in_(COUNTS_AS_CONTACT),
-            Message.created_at > now - CONTACT_WINDOW,
+            contacted_at > now - CONTACT_WINDOW,
         )
     ).all()
     allowed_at = contact_allowed_at(now, tenant.zone, tenant.policy, recent)
@@ -187,24 +192,6 @@ def _has_unsent_message(session: Session, customer: Customer) -> bool:
         Message.status.in_(UNSENT_STATUSES),
     )
     return bool(session.scalar(select(unsent.exists())))
-
-
-def _is_on_hold(session: Session, customer: Customer) -> bool:
-    """Spec: while any case of a customer is Investigating, or waits on a human
-    dispute review, no reminder goes to that customer."""
-    investigating = select(Case.id).where(
-        Case.customer_id == customer.id, Case.state == CaseState.INVESTIGATING
-    )
-    dispute_review = (
-        select(Task.id)
-        .join(Case, Case.id == Task.case_id)
-        .where(
-            Case.customer_id == customer.id,
-            Task.kind == TaskKind.REVIEW_DISPUTE,
-            Task.status == TaskStatus.OPEN,
-        )
-    )
-    return bool(session.scalar(select(investigating.exists() | dispute_review.exists())))
 
 
 def _queue_reminder(

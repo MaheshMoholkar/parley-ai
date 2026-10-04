@@ -111,8 +111,8 @@ def test_next_reminder_waits_while_the_last_one_awaits_approval(
     run_round(rt, tenant_id)
 
     assert len(messages(rt)) == 1  # no second reminder while the first is unsent
-    c = case(rt, "A-1")
-    assert (c.state, c.next_action_at) == (CaseState.SCHEDULED, rt.clock.now() + timedelta(days=1))
+    # The wait for a reply has not started: the reminder has not gone out.
+    assert case(rt, "A-1").state == CaseState.AWAITING_REPLY
 
 
 def test_customer_without_email_goes_to_a_human(rt: Runtime, tmp_path: Path) -> None:

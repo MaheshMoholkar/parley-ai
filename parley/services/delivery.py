@@ -13,13 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from parley.core.domain import Direction, EventType, MessageStatus
-from parley.core.workflow import on_delivery_failed
+from parley.core.workflow import on_delivery_failed, on_reminder_sent
 from parley.db.models import Case, Message, MessageCase, Tenant
 from parley.ports.channel import OutboundMessage
 from parley.ports.voice import VoiceError
 from parley.services.calls import VOICE, place_reminder_call
 from parley.services.cases import apply_transition, cases_of_message
 from parley.services.runtime import Runtime
+from parley.services.sendable import is_reminder, stale_reason, withdraw
 from parley.services.tracing import annotate, step
 from parley.services.webhooks import emit
 
@@ -73,8 +74,16 @@ def _lock_next_pending(
 
 def _deliver(rt: Runtime, session: Session, message: Message) -> bool:
     now = rt.clock.now()
-    if message.channel == VOICE and _quiet_now(session, message, now):
-        return False  # a call waits for allowed hours, however long approval took
+    reminder = is_reminder(session, message.id)
+    if reminder:
+        # Things may have changed since it was queued (the last check before
+        # anything leaves; see sendable.py).
+        reason = stale_reason(session, message)
+        if reason is not None:
+            withdraw(session, message, reason, now)
+            return False
+        if _quiet_now(session, message, now):
+            return False  # waits for allowed hours, however long approval took
     message.attempts += 1
     try:
         if message.channel == VOICE:
@@ -104,10 +113,17 @@ def _deliver(rt: Runtime, session: Session, message: Message) -> bool:
     message.provider_message_id = provider_id
     message.sent_at = now
     message.last_error = None
+    cases = cases_of_message(session, message.id, lock=True)
+    if reminder:
+        policy = session.get_one(Tenant, message.tenant_id).policy
+        for case in cases:
+            transition = on_reminder_sent(case.view(), policy, now)
+            if transition is not None:
+                apply_transition(session, case, transition, now)
     data = {
         "message_id": message.id,
         "customer_id": message.customer_id,
-        "case_ids": [case.id for case in cases_of_message(session, message.id)],
+        "case_ids": [case.id for case in cases],
         "channel": message.channel,
     }
     emit(session, message.tenant_id, EventType.MESSAGE_SENT, data, now)

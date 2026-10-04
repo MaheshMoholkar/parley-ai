@@ -14,6 +14,7 @@ from parley.core.domain import (
     EventType,
     InvoiceStatus,
     PromiseStatus,
+    TaskKind,
     TaskStatus,
 )
 from parley.core.messages import InvoiceLine
@@ -210,6 +211,24 @@ def open_overdue_cases(session: Session, tenant: Tenant, now: datetime) -> int:
             }
             emit(session, tenant.id, EventType.CASE_OPENED, opened_data, now)
     return opened
+
+
+def customer_on_hold(session: Session, customer_id: uuid.UUID) -> bool:
+    """Spec: while any case of a customer is Investigating, or waits on a human
+    dispute review, no reminder goes to that customer."""
+    investigating = select(Case.id).where(
+        Case.customer_id == customer_id, Case.state == CaseState.INVESTIGATING
+    )
+    dispute_review = (
+        select(Task.id)
+        .join(Case, Case.id == Task.case_id)
+        .where(
+            Case.customer_id == customer_id,
+            Task.kind == TaskKind.REVIEW_DISPUTE,
+            Task.status == TaskStatus.OPEN,
+        )
+    )
+    return bool(session.scalar(select(investigating.exists() | dispute_review.exists())))
 
 
 # --- Pause and resume ------------------------------------------------------------

@@ -34,6 +34,7 @@ from parley.services.cases import (
     invoice_line,
     record_amounts,
 )
+from parley.services.sendable import stale_reason
 
 
 class TaskError(ValueError):
@@ -100,6 +101,10 @@ def _resolve_approval(
     problems = check_draft(message.subject, message.body, [invoice_line(c.invoice) for c in cases])
     if problems:
         raise TaskError(problems)
+    reason = stale_reason(session, message)
+    if reason is not None:
+        # The worker withdraws it on its next round; the reviewer is told why now.
+        raise TaskError([f"this reminder should no longer be sent: {reason}"])
     record_amounts(session, message.id, cases)
     message.status = MessageStatus.PENDING
 
