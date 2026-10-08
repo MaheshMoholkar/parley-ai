@@ -1,5 +1,5 @@
 """Write-back to Vyavasay (spec: "Write-back"): notes about collection activity
-on each invoice, through the activity-notes endpoint the spec asks Vyavasay to
+on each invoice, through the collection-activity endpoint the spec asks Vyavasay to
 add. Runs against the fake server."""
 
 from datetime import datetime, time, timedelta

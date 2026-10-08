@@ -22,7 +22,7 @@ class FakeVyavasay:
     payments: list[dict[str, Any]] = field(default_factory=list)
     sale_returns: list[dict[str, Any]] = field(default_factory=list)
     api_token: str = "api-token"
-    # Write-back: notes added through the (proposed) activity-notes endpoint, as
+    # Write-back: entries added through the (proposed) collection-activity endpoint, as
     # (invoice id, text). The endpoint is missing until `notes_endpoint` is set;
     # `notes_down` makes it answer 503.
     notes: list[tuple[str, str]] = field(default_factory=list)
@@ -130,7 +130,7 @@ class FakeVyavasay:
 
     def _post(self, path: str, request: httpx.Request) -> httpx.Response:
         match path.strip("/").split("/"):
-            case ["v1", "sales-invoices", invoice_id, "activity-notes"] if self.notes_endpoint:
+            case ["v1", "sales-invoices", invoice_id, "collection-activity"] if self.notes_endpoint:
                 if self.notes_down:
                     return httpx.Response(503, json={"error": "maintenance"})
                 if invoice_id not in self.invoices:

@@ -123,8 +123,9 @@ the sync, so a lost or repeated event does no harm (a repeated id is ignored).
 
 - *Write-back.* With `"write_notes": true` in the tenant's adapter settings,
   each step (case opened, reminder sent, reply, promise made or broken, dispute,
-  handed to a person, closed) adds a one-line internal note to the invoice
-  through the adapter's `add_note`. Notes go through an outbox like webhooks:
+  handed to a person, closed) adds a one-line internal entry to the invoice's
+  activity log through the adapter's `add_note`. It never writes the
+  invoice's own notes, which are printed on the invoice. Notes go through an outbox like webhooks:
   at least once, with an idempotency key, retried with backoff. Adapters that
   cannot write notes (CSV) leave this off; the ERP adapter's docstring names
   the endpoint it uses.

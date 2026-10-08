@@ -13,7 +13,8 @@ Tenant adapter_config:
       "vyavasay_tenant_id": "<the tenant's id in Vyavasay>",
       "currency": "INR",
       // add notes about collection activity to the invoices (off by default;
-      // needs Vyavasay's activity-notes endpoint, see adapter.py)
+      // needs Vyavasay's collection-activity endpoint, see adapter.py; never
+      // the invoice's own notes field, which is printed on the invoice)
       "write_notes": true
     }
 

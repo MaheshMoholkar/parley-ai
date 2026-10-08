@@ -15,10 +15,13 @@ What Vyavasay gives, and how it is turned into what the core expects:
 - Payments: posted incoming payments. They carry no currency; Vyavasay
   invoices are always in the tenant's base currency (INR).
 - Contacts: one email and one phone per party.
-- Write-back (`add_note`): an internal note on the sales invoice through
-  POST /v1/sales-invoices/{id}/activity-notes. Vyavasay does not have this
-  endpoint yet; it is the one the spec asks it to add ("Write-back"). Notes are
-  sent only for tenants with "write_notes": true, so nothing calls it before then.
+- Write-back (`add_note`): an entry in the invoice's collection-activity log
+  through POST /v1/sales-invoices/{id}/collection-activity. Vyavasay does not
+  have this endpoint yet; it is the one the spec asks it to add ("Write-back").
+  It is a separate log, never the invoice's `notes` field: that field holds the
+  invoice's own notes, printed on the invoice, and editing a posted invoice
+  re-posts its ledger and stock entries. Entries are sent only for tenants with
+  "write_notes": true, so nothing calls the endpoint before it exists.
 
 Money arrives as decimal strings and dates as YYYY-MM-DD or RFC 3339; both are
 converted here, so nothing Vyavasay-shaped reaches the core.
@@ -35,7 +38,8 @@ from parley.core.domain import InvoiceStatus
 from parley.core.money import to_minor_units
 from parley.ports.accounting import NoteError, SourceCustomer, SourceInvoice, SourcePayment
 
-NOTES_PATH = "/v1/sales-invoices/{id}/activity-notes"
+# A separate activity log on the invoice, not its `notes` field (see above).
+NOTES_PATH = "/v1/sales-invoices/{id}/collection-activity"
 OPEN_PAYMENT_STATUSES = ("unpaid", "partial", "overdue")
 OPEN_CREDIT_STATUSES = ("open", "partial")
 
