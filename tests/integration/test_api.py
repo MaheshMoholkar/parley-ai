@@ -1,10 +1,13 @@
 import uuid
+from datetime import date
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from parley.api.app import create_app
+from parley.core.domain import PromiseStatus
+from parley.db.models import Case, Promise
 from parley.services.due_cases import run_due_cases
 from parley.services.runtime import Runtime
 from parley.services.tenants import create_tenant
@@ -117,3 +120,33 @@ def test_oversized_bodies_are_refused_before_they_are_read(client: TestClient, r
 
     response = client.post("/v1/inbound/email", content=chunks())
     assert response.status_code == 413
+
+
+def test_a_source_system_finds_the_case_for_its_own_invoice(
+    client: TestClient, rt: Runtime, tmp_path: Path
+) -> None:
+    _, auth = new_tenant(rt, tmp_path, "acme")
+    _, other = new_tenant(rt, tmp_path, "other")  # same invoice numbers, another tenant
+    client.post("/v1/sync", headers=auth)
+    client.post("/v1/sync", headers=other)
+
+    page = client.get("/v1/cases", headers=auth, params={"invoice_external_id": "A-1"}).json()
+    assert page["total"] == 1
+    [found] = page["items"]
+    assert (found["invoice"]["external_id"], found["invoice"]["source"]) == ("A-1", "csv")
+
+    with rt.session_factory.begin() as session:
+        case = session.get_one(Case, found["id"])
+        session.add(
+            Promise(
+                tenant_id=case.tenant_id,
+                case_id=case.id,
+                amount=50000,
+                promised_date=date(2026, 1, 9),
+                status=PromiseStatus.OPEN,
+            )
+        )
+    detail = client.get(f"/v1/cases/{found['id']}", headers=auth).json()
+    promises = [(p["amount"], p["promised_date"]) for p in detail["promises"]]
+    assert promises == [(50000, "2026-01-09")]
+    assert detail["disputes"] == []

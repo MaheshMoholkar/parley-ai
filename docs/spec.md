@@ -131,6 +131,7 @@ Each adapter also declares two optional capabilities.
 
 - **Events:** the source system pushes `invoice.created`, `invoice.updated`, `invoice.voided` and `payment.recorded` to the core. Without events, a sync job polls the four methods on a timer.
 - **Write-back:** `add_note(invoice, text)` so the source system can show collection activity. An adapter may leave this unsupported.
+- As decided (after M7): no adapter writes back. Vyavasay has no notes endpoint; the only way to put text on an invoice is `PATCH /v1/sales-invoices/{id}` with `notes`, which on a posted invoice reverses and re-posts its ledger entries and stock movements, and the notes print on the invoice PDF the customer receives. The source system reads collection activity instead: `GET /v1/cases?invoice_external_id=<its invoice id>` finds the case, `GET /v1/cases/{id}` gives its timeline (contacts, promises, disputes, tasks), and webhooks announce each change as it happens. If Vyavasay later adds an internal notes endpoint, an `add_note` adapter method can be built on the webhook events.
 
 **CSV adapter (built first)**
 
@@ -415,7 +416,7 @@ A host application integrates through a small REST API and a set of signed outbo
 | --- | --- |
 | `POST /v1/sync` | Pull invoices and payments through the tenant's adapter now |
 | `POST /v1/events` | Receive `invoice.*` and `payment.recorded` events from the source system |
-| `GET /v1/cases` | List cases, filtered by state or customer |
+| `GET /v1/cases` | List cases, filtered by state, customer, or the source's invoice id (`invoice_external_id`) |
 | `GET /v1/cases/{id}` | One case with its timeline of contacts, promises and tasks |
 | `POST /v1/cases/{id}/pause` and `/resume` | Stop or restart outreach on one case |
 | `POST /v1/customers/{id}/pause` and `/resume` | Stop or restart outreach for a customer |

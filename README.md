@@ -119,6 +119,12 @@ An event only asks for a fresh sync: the worker syncs that tenant on its next
 round instead of waiting for the interval. Invoice facts still come only from
 the sync, so a lost or repeated event does no harm (a repeated id is ignored).
 
+**Showing collection activity in the source system.** The core never writes
+into the source's invoices. The source reads instead: `GET
+/v1/cases?invoice_external_id=<its invoice id>` finds the case for one of its
+invoices, and `GET /v1/cases/{id}` returns its timeline (messages, promises,
+disputes and tasks). Webhooks (below) say when something changed.
+
 **Webhooks out.** When the tenant has a webhook URL, these are posted to it:
 `case.opened`, `message.sent`, `reply.received`, `promise.created`,
 `promise.broken`, `dispute.opened`, `task.created`, `case.closed`.

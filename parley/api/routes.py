@@ -23,18 +23,20 @@ from parley.api.schemas import (
     CaseOut,
     CasePage,
     CustomerOut,
+    DisputeOut,
     EventIn,
     EventOut,
     InboundOut,
     MessageOut,
     MetricsOut,
+    PromiseOut,
     ResolveTaskIn,
     SyncOut,
     TaskOut,
     TaskPage,
 )
 from parley.core.domain import CaseState, TaskStatus
-from parley.db.models import Case, Message, MessageCase, Task
+from parley.db.models import Case, Dispute, Invoice, Message, MessageCase, Promise, Task
 from parley.services.accounting import AdapterConfigError
 from parley.services.cases import NotFoundError, set_case_paused, set_customer_paused
 from parley.services.events import record_event
@@ -132,14 +134,23 @@ def list_cases(
     tenant: TenantDep,
     state: CaseState | None = None,
     customer_id: uuid.UUID | None = None,
+    invoice_external_id: str | None = None,
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> CasePage:
+    """List cases. `invoice_external_id` finds the case for an invoice by the
+    source system's own id, so the source can show collection activity on its
+    invoice screen by reading it from here."""
     conditions = [Case.tenant_id == tenant.id]
     if state is not None:
         conditions.append(Case.state == state)
     if customer_id is not None:
         conditions.append(Case.customer_id == customer_id)
+    if invoice_external_id is not None:
+        on_invoice = select(Invoice.id).where(
+            Invoice.tenant_id == tenant.id, Invoice.external_id == invoice_external_id
+        )
+        conditions.append(Case.invoice_id.in_(on_invoice))
 
     total = session.scalar(select(func.count()).select_from(Case).where(*conditions)) or 0
     cases = session.scalars(
@@ -157,7 +168,7 @@ def list_cases(
 
 @router.get("/v1/cases/{case_id}")
 def get_case(session: SessionDep, tenant: TenantDep, case_id: uuid.UUID) -> CaseDetailOut:
-    """One case with its messages and tasks."""
+    """One case with its timeline: messages, promises, disputes and tasks."""
     case = session.scalar(select(Case).where(Case.id == case_id, Case.tenant_id == tenant.id))
     if case is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "case not found")
@@ -167,12 +178,20 @@ def get_case(session: SessionDep, tenant: TenantDep, case_id: uuid.UUID) -> Case
         .where(MessageCase.case_id == case.id)
         .order_by(Message.created_at)
     ).all()
+    promises = session.scalars(
+        select(Promise).where(Promise.case_id == case.id).order_by(Promise.created_at, Promise.id)
+    ).all()
+    disputes = session.scalars(
+        select(Dispute).where(Dispute.case_id == case.id).order_by(Dispute.created_at)
+    ).all()
     tasks = session.scalars(
         select(Task).where(Task.case_id == case.id).order_by(Task.created_at)
     ).all()
     return CaseDetailOut(
         case=CaseOut.model_validate(case),
         messages=[MessageOut.model_validate(m) for m in messages],
+        promises=[PromiseOut.model_validate(p) for p in promises],
+        disputes=[DisputeOut.model_validate(d) for d in disputes],
         tasks=[TaskOut.model_validate(t) for t in tasks],
     )
 

@@ -11,8 +11,10 @@ from parley.core.domain import (
     CaseState,
     CloseReason,
     Direction,
+    DisputeStatus,
     InvoiceStatus,
     MessageStatus,
+    PromiseStatus,
     SourceEventType,
     TaskAction,
     TaskKind,
@@ -26,6 +28,10 @@ class _FromORM(BaseModel):
 
 class InvoiceOut(_FromORM):
     id: uuid.UUID
+    # Where the invoice came from and its id there, so a source system can find
+    # the case for one of its own invoices (GET /v1/cases?invoice_external_id=).
+    source: str
+    external_id: str
     number: str
     amount_due: int
     currency: str
@@ -85,9 +91,29 @@ class ResolveTaskIn(BaseModel):
     note: str = ""
 
 
+class PromiseOut(_FromORM):
+    id: uuid.UUID
+    amount: int
+    promised_date: date
+    status: PromiseStatus
+    created_at: datetime
+
+
+class DisputeOut(_FromORM):
+    id: uuid.UUID
+    reason: str
+    status: DisputeStatus
+    created_at: datetime
+    resolved_at: datetime | None
+
+
 class CaseDetailOut(BaseModel):
+    """A case with its timeline: contacts, promises, disputes and tasks."""
+
     case: CaseOut
     messages: list[MessageOut]
+    promises: list[PromiseOut]
+    disputes: list[DisputeOut]
     tasks: list[TaskOut]
 
 
