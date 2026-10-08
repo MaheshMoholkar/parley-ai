@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from parley.core.domain import EventType, WebhookStatus
 from parley.db.models import OutboundEvent, Tenant
+from parley.services.notes import queue_notes
 from parley.services.runtime import Runtime
 from parley.services.tracing import annotate, step
 
@@ -49,9 +50,11 @@ def emit(
     data: dict[str, Any],
     now: datetime,
 ) -> None:
-    """Queue an event for the tenant's webhook. Does nothing if the tenant has no
-    webhook URL, so tenants without webhooks build up no backlog."""
+    """Queue an event for the tenant's webhook, and a note for the source system
+    if the tenant writes back (services/notes.py). Without a webhook URL no event
+    is queued, so tenants without webhooks build up no backlog."""
     tenant = session.get_one(Tenant, tenant_id)
+    queue_notes(session, tenant, event_type, data, now)
     if not tenant.webhook_url:
         return
     session.add(

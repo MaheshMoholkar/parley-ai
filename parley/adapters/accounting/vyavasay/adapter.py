@@ -15,6 +15,10 @@ What Vyavasay gives, and how it is turned into what the core expects:
 - Payments: posted incoming payments. They carry no currency; Vyavasay
   invoices are always in the tenant's base currency (INR).
 - Contacts: one email and one phone per party.
+- Write-back (`add_note`): an internal note on the sales invoice through
+  POST /v1/sales-invoices/{id}/activity-notes. Vyavasay does not have this
+  endpoint yet; it is the one the spec asks it to add ("Write-back"). Notes are
+  sent only for tenants with "write_notes": true, so nothing calls it before then.
 
 Money arrives as decimal strings and dates as YYYY-MM-DD or RFC 3339; both are
 converted here, so nothing Vyavasay-shaped reaches the core.
@@ -24,11 +28,14 @@ from collections import defaultdict
 from datetime import date
 from typing import Any
 
+import httpx2 as httpx
+
 from parley.adapters.accounting.vyavasay.client import VyavasayClient
 from parley.core.domain import InvoiceStatus
 from parley.core.money import to_minor_units
-from parley.ports.accounting import SourceCustomer, SourceInvoice, SourcePayment
+from parley.ports.accounting import NoteError, SourceCustomer, SourceInvoice, SourcePayment
 
+NOTES_PATH = "/v1/sales-invoices/{id}/activity-notes"
 OPEN_PAYMENT_STATUSES = ("unpaid", "partial", "overdue")
 OPEN_CREDIT_STATUSES = ("open", "partial")
 
@@ -142,6 +149,29 @@ class VyavasayAccountingAdapter:
                         )
             self._credits = dict(credits)
         return self._credits
+
+    # --- Write-back (NoteWriter) -------------------------------------------------------
+
+    def add_note(self, invoice_external_id: str, text: str, idempotency_key: str) -> None:
+        path = NOTES_PATH.format(id=invoice_external_id)
+        try:
+            response = self.client.post(
+                path,
+                {"text": text, "source": "parley"},
+                headers={"Idempotency-Key": idempotency_key},
+            )
+        except httpx.TransportError as exc:
+            # The key makes a retry safe even if the first request got through.
+            raise NoteError(f"could not reach Vyavasay: {exc}", retryable=True) from None
+        status = response.status_code
+        if status in (200, 201, 204, 409):  # 409: this key was already written
+            return
+        detail = f"POST {path}: {status} {response.text[:200]}"
+        if status == 404:
+            raise NoteError(
+                f"{detail} (no such invoice, or no notes endpoint yet)", retryable=False
+            )
+        raise NoteError(detail, retryable=status >= 500 or status == 429)
 
 
 def _date(text: str) -> date:

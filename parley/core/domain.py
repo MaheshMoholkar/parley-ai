@@ -164,3 +164,11 @@ class CallStatus(StrEnum):
 class CallAudit(StrEnum):
     PASSED = "passed"
     FAILED = "failed"
+
+
+class NoteStatus(StrEnum):
+    """A note for the source system (write-back), in its outbox."""
+
+    PENDING = "pending"
+    WRITTEN = "written"
+    FAILED = "failed"  # refused, unsupported, or out of retries

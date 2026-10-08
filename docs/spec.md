@@ -93,6 +93,7 @@ The core keeps its own copy of customers, invoices and payments in one fixed sha
 | `agent_run` | case\_id, steps, tokens, cost, outcome | Core |
 | `model_call` | job prompt version, tier, model, tokens, estimated cost, latency, ok or error | Core |
 | `unmatched_inbound` | sender, recipients, subject, body, reason (mail that matched no case) | Core |
+| `source_note` | invoice\_id, text, status (pending, written, failed), attempts, next\_attempt\_at (the write-back outbox) | Core |
 | `call` | message\_id, provider call id, status (placed, in progress, answered, not reached), answered by, identity confirmed, turns (transcript and tool calls in order), audit result | Core |
 | `inbound_event` | event id (unique per tenant), type, data, received\_at (events pushed by the source system) | Core |
 | `outbound_event` | type, data, status (pending, delivered, failed), attempts, next\_attempt\_at (the webhook outbox) | Core |
@@ -131,7 +132,9 @@ Each adapter also declares two optional capabilities.
 
 - **Events:** the source system pushes `invoice.created`, `invoice.updated`, `invoice.voided` and `payment.recorded` to the core. Without events, a sync job polls the four methods on a timer.
 - **Write-back:** `add_note(invoice, text)` so the source system can show collection activity. An adapter may leave this unsupported.
-- As decided (after M7): no adapter writes back. Vyavasay has no notes endpoint; the only way to put text on an invoice is `PATCH /v1/sales-invoices/{id}` with `notes`, which on a posted invoice reverses and re-posts its ledger entries and stock movements, and the notes print on the invoice PDF the customer receives. The source system reads collection activity instead: `GET /v1/cases?invoice_external_id=<its invoice id>` finds the case, `GET /v1/cases/{id}` gives its timeline (contacts, promises, disputes, tasks), and webhooks announce each change as it happens. If Vyavasay later adds an internal notes endpoint, an `add_note` adapter method can be built on the webhook events.
+- As built (after M7): write-back is on per tenant (`"write_notes": true` in its adapter settings, off by default). The events sent to webhooks (case opened, reminder sent, reply received, promise made or broken, dispute opened, handed to a person, case closed) each queue a one-line internal note for their invoice in a `source_note` outbox, in the same transaction as the change; a worker step adds them through the adapter's `add_note`, oldest first, at least once, with each note's id as its idempotency key, retried with backoff and given up after 10 attempts or at once if the source refuses it. An adapter without `add_note` (CSV) does not write back.
+- Vyavasay does not have a notes endpoint yet, and its invoice `notes` field cannot be used: patching a posted invoice reverses and re-posts its ledger and stock entries, and those notes print on the customer's invoice. The adapter is written for this endpoint, which Vyavasay is to add: `POST /v1/sales-invoices/{id}/activity-notes` with `{"text": "...", "source": "parley"}` and an `Idempotency-Key` header; it answers 201 (or 409 for a key it has already stored), and the note must be internal (shown to staff on the invoice screen, never printed or sent to the customer) and must not touch the ledger, stock or the invoice's version. Until it exists the endpoint answers 404 and notes are marked failed without retrying.
+- The source can also read collection activity: `GET /v1/cases?invoice_external_id=<its invoice id>` finds the case and `GET /v1/cases/{id}` gives its timeline (contacts, promises, disputes, tasks).
 
 **CSV adapter (built first)**
 

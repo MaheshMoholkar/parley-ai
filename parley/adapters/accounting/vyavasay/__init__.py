@@ -11,7 +11,10 @@ Tenant adapter_config:
       "phone": "98xxxxxxxx",
       "password": "aws:arn:aws:secretsmanager:ap-south-1:...:secret:vyavasay-acme",
       "vyavasay_tenant_id": "<the tenant's id in Vyavasay>",
-      "currency": "INR"
+      "currency": "INR",
+      // add notes about collection activity to the invoices (off by default;
+      // needs Vyavasay's activity-notes endpoint, see adapter.py)
+      "write_notes": true
     }
 
 Secrets are references ("env:NAME" or "aws:<secret arn>"), resolved when the

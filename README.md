@@ -119,11 +119,19 @@ An event only asks for a fresh sync: the worker syncs that tenant on its next
 round instead of waiting for the interval. Invoice facts still come only from
 the sync, so a lost or repeated event does no harm (a repeated id is ignored).
 
-**Showing collection activity in the source system.** The core never writes
-into the source's invoices. The source reads instead: `GET
-/v1/cases?invoice_external_id=<its invoice id>` finds the case for one of its
-invoices, and `GET /v1/cases/{id}` returns its timeline (messages, promises,
-disputes and tasks). Webhooks (below) say when something changed.
+**Showing collection activity in the source system.** Two ways:
+
+- *Write-back.* With `"write_notes": true` in the tenant's adapter settings,
+  each step (case opened, reminder sent, reply, promise made or broken, dispute,
+  handed to a person, closed) adds a one-line internal note to the invoice
+  through the adapter's `add_note`. Notes go through an outbox like webhooks:
+  at least once, with an idempotency key, retried with backoff. Adapters that
+  cannot write notes (CSV) leave this off; the ERP adapter's docstring names
+  the endpoint it uses.
+- *Reading.* `GET /v1/cases?invoice_external_id=<its invoice id>` finds the
+  case for one of the source's invoices, and `GET /v1/cases/{id}` returns its
+  timeline (messages, promises, disputes and tasks). Webhooks (below) say when
+  something changed.
 
 **Webhooks out.** When the tenant has a webhook URL, these are posted to it:
 `case.opened`, `message.sent`, `reply.received`, `promise.created`,
@@ -359,6 +367,7 @@ parley/
     money.py       amounts as whole paise
     messages.py    the fixed reminder template (fallback when drafts fail)
     voice.py       the audit every call transcript gets afterwards
+    notes.py       the wording of write-back notes
     phone.py       phone numbers in the form telephony providers need
   collections_ai/ the model jobs and their versioned prompts (prompts/*.md)
   ports/         interfaces the core needs from the outside world
@@ -393,6 +402,7 @@ parley/
     voice_bridge.py  carries a live call between the phone and the speech model
     tracing.py     one span per step (OpenTelemetry)
     webhooks.py    the outbound events outbox and its delivery
+    notes.py       write-back: notes on invoices in the source system
     worker.py      the background loop that runs all of the above
   api/           HTTP endpoints (FastAPI) and the review screen (review.html)
   cli.py         the `parley` command

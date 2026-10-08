@@ -61,11 +61,32 @@ class VyavasayClient:
             if not items or offset >= int(page.get("total", 0)):
                 return
 
-    def _request(self, path: str, params: Any) -> httpx.Response:
-        response = self._http.get(path, params=params, headers=self._auth_header())
+    def post(self, path: str, body: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
+        """POST JSON and return the response, whatever its status (the caller
+        decides what each status means). Network errors raise httpx errors."""
+        return self._request(path, None, method="POST", body=body, headers=headers)
+
+    def _request(
+        self,
+        path: str,
+        params: Any,
+        method: str = "GET",
+        body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        def send() -> httpx.Response:
+            return self._http.request(
+                method,
+                path,
+                params=params,
+                json=body,
+                headers={**(headers or {}), **self._auth_header()},
+            )
+
+        response = send()
         if response.status_code == 401 and self._fixed_token is None:
             self._session_token = None  # the session expired: log in again, once
-            response = self._http.get(path, params=params, headers=self._auth_header())
+            response = send()
         return response
 
     def _auth_header(self) -> dict[str, str]:

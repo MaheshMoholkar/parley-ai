@@ -14,8 +14,8 @@ from sqlalchemy import select
 
 from parley.adapters.clock import FakeClock
 from parley.api.app import create_app
-from parley.core.domain import WebhookStatus
-from parley.db.models import Invoice, OutboundEvent, Tenant
+from parley.core.domain import NoteStatus, WebhookStatus
+from parley.db.models import Invoice, OutboundEvent, SourceNote, Tenant
 from parley.services.runtime import Runtime
 from parley.services.tenants import create_tenant, set_webhook_url
 from parley.services.webhooks import MAX_ATTEMPTS, deliver_webhooks
@@ -202,3 +202,22 @@ def test_no_webhook_url_means_no_events(rt: Runtime, tmp_path: Path) -> None:
     ):
         with rt.session_factory.begin() as session, pytest.raises(ValueError, match="public"):
             set_webhook_url(session, setup.tenant_id, internal)
+
+
+def test_write_back_on_a_source_that_cannot_take_notes_fails_clearly(
+    rt: Runtime, tmp_path: Path
+) -> None:
+    aging = write_aging(tmp_path / "aging.csv", [invoice_row("A-1", "Asha", "1000", "2026-01-01")])
+    with rt.session_factory.begin() as session:
+        create_tenant(
+            session,
+            "Acme",
+            "Asia/Kolkata",
+            {"kind": "csv", "invoices_path": str(aging), "write_notes": True},
+            policy_overrides={"approval_mode": "none"},
+        )
+    run_once(rt, sync_interval=DAY)
+    with rt.session_factory() as session:
+        queued = session.scalars(select(SourceNote)).all()
+    assert queued and {n.status for n in queued} == {NoteStatus.FAILED}
+    assert queued[0].last_error == "the csv adapter cannot write notes"

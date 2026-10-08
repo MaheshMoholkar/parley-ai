@@ -48,6 +48,7 @@ from parley.core.domain import (
     FindingResult,
     InvoiceStatus,
     MessageStatus,
+    NoteStatus,
     PromiseStatus,
     ReplyIntent,
     TaskKind,
@@ -467,3 +468,25 @@ class Call(Base):
     # When the call's audio stream connected; a call accepts only one.
     connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SourceNote(Base):
+    """Outbox for write-back (spec: "Write-back"): a note about collection
+    activity, to be added to the invoice in the source system. Written in the
+    same transaction as the change it reports; a worker step sends it."""
+
+    __tablename__ = "source_notes"
+    __table_args__ = (Index("ix_source_notes_due", "tenant_id", "status", "next_attempt_at"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    # Increases with every note, so an invoice's notes are written in order.
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(), unique=True)
+    tenant_id: Mapped[uuid.UUID] = _tenant_fk()
+    invoice_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("invoices.id"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    status: Mapped[NoteStatus] = mapped_column(_enum(NoteStatus))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    written_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

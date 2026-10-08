@@ -125,6 +125,7 @@ def _deliver(rt: Runtime, session: Session, message: Message) -> bool:
         "customer_id": message.customer_id,
         "case_ids": [case.id for case in cases],
         "channel": message.channel,
+        "reminder": reminder,  # False for a message the customer asked for
     }
     emit(session, message.tenant_id, EventType.MESSAGE_SENT, data, now)
     return True

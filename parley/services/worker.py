@@ -11,7 +11,8 @@ Each round, for each tenant:
    (model, checks, approval gate);
 7. deliver pending messages from the outbox (emails are sent, calls dialled);
 8. close calls the phone provider never reported back on;
-9. post pending events to the tenant's webhook.
+9. post pending events to the tenant's webhook;
+10. add pending notes to invoices in the source system (if it writes back).
 
 Several worker processes can run at once; the row locks in each step keep them
 from doing the same work twice.
@@ -35,6 +36,7 @@ from parley.services.drafting import draft_queued_messages
 from parley.services.due_cases import run_due_cases
 from parley.services.events import latest_event_at
 from parley.services.investigation import run_investigations
+from parley.services.notes import write_source_notes
 from parley.services.replies import read_received_replies
 from parley.services.runtime import Runtime
 from parley.services.sendable import withdraw_stale_messages
@@ -89,6 +91,7 @@ def run_tenant_once(
         deliver_pending_messages,
         finish_stale_calls,
         deliver_webhooks,
+        write_source_notes,
     ]
     for step in steps:
         # A step that fails is logged and retried next round; it must not stop
